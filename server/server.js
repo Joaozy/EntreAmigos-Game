@@ -3,9 +3,11 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 
-// --- IMPORTAÇÃO DOS TEMAS ---
-// Certifique-se de ter criado o arquivo 'themes.json' na mesma pasta
-const THEMES = require('./themes.json'); 
+// --- IMPORTAÇÃO DOS DADOS ---
+// Certifique-se de que estes arquivos existem na pasta server/
+const THEMES_ITO = require('./themes.json'); 
+const WORDS_CHACAFE = require('./words.json'); 
+const WORDS_CODENAMES = require('./words_codenames.json'); 
 
 const app = express();
 app.use(cors());
@@ -13,295 +15,421 @@ app.use(cors());
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: "*", methods: ["GET", "POST"] },
-  // Aumenta tolerância para conexões instáveis (3G/4G/Celular)
-  pingTimeout: 60000, 
+  pingTimeout: 60000, // Tolerância alta para conexões mobile
 });
 
-// Armazenamento das salas na memória RAM
 const rooms = new Map();
 
-// Função para embaralhar e gerar cartas (1 a 100)
+// --- UTILITÁRIOS ---
+
+const shuffle = (array) => {
+    const newArr = [...array];
+    for (let i = newArr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [newArr[i], newArr[j]] = [newArr[j], newArr[i]];
+    }
+    return newArr;
+};
+
 const generateDeck = () => {
   const deck = Array.from({ length: 100 }, (_, i) => i + 1);
-  for (let i = deck.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [deck[i], deck[j]] = [deck[j], deck[i]];
-  }
-  return deck;
+  return shuffle(deck);
 };
 
 io.on('connection', (socket) => {
-  console.log(`[CONEXÃO] Nova conexão: ${socket.id}`);
+  console.log(`[CONEXÃO] Nova: ${socket.id}`);
 
-  // --- 1. CRIAR SALA ---
+  // ================= GESTÃO DE SALAS =================
+
   socket.on('create_room', ({ nickname, gameType }) => {
     const roomId = Math.random().toString(36).substring(2, 6).toUpperCase();
-    console.log(`[CRIAR] Sala ${roomId} criada por ${nickname}`);
+    console.log(`[CRIAR] Sala ${roomId} (${gameType}) por ${nickname}`);
     
     rooms.set(roomId, {
       id: roomId,
-      gameType, // Ex: 'ITO'
+      gameType, 
       host: socket.id,
       phase: 'LOBBY',
       players: [],
-      currentTheme: null
+      gameData: {} 
     });
     
     socket.emit('room_created', roomId);
     joinRoomInternal(socket, roomId, nickname, true);
   });
 
-  // --- 2. ENTRAR NA SALA ---
   socket.on('join_room', ({ roomId, nickname }) => {
     joinRoomInternal(socket, roomId?.toUpperCase(), nickname, false);
   });
 
-  // --- 3. RECONEXÃO (Salva a vida no Mobile) ---
+  // --- RECONEXÃO INTELIGENTE ---
   socket.on('rejoin_room', ({ roomId, nickname }) => {
     const room = rooms.get(roomId);
     if (!room) {
-      socket.emit('error_msg', 'A sala expirou ou não existe mais.');
+      socket.emit('error_msg', 'A sala expirou.');
       return;
     }
     
-    // Procura o jogador pelo NOME (já que o socket mudou)
     const existingIndex = room.players.findIndex(p => p.nickname === nickname);
     
     if (existingIndex !== -1) {
-       // --- JOGADOR ENCONTRADO (RECUPERAÇÃO) ---
        const oldSocketId = room.players[existingIndex].id;
        
-       // Atualiza para o novo ID de conexão
+       // 1. Atualiza ID na lista principal
        room.players[existingIndex].id = socket.id;
        socket.join(roomId);
        
-       // Se o antigo socket era o Host, passa a coroa para o novo
+       // 2. Transfere Host se necessário
        if (room.host === oldSocketId) {
          room.host = socket.id;
          room.players[existingIndex].isHost = true;
        }
 
-       console.log(`[RECONECTOU] ${nickname} voltou para sala ${roomId}`);
+       // 3. FIX: Atualiza IDs dentro das estruturas dos jogos
+       let gameDataUpdated = false;
+
+       if (room.gameData) {
+           // CHA OU CAFE
+           if (room.gameType === 'CHA_CAFE') {
+               if (room.gameData.narratorId === oldSocketId) { room.gameData.narratorId = socket.id; gameDataUpdated = true; }
+               if (room.gameData.lastGuesserId === oldSocketId) { room.gameData.lastGuesserId = socket.id; gameDataUpdated = true; }
+               if (room.gameData.guessersIds) {
+                   const gIdx = room.gameData.guessersIds.indexOf(oldSocketId);
+                   if (gIdx !== -1) { room.gameData.guessersIds[gIdx] = socket.id; gameDataUpdated = true; }
+               }
+           }
+           
+           // CODENAMES (Atualiza times)
+           if (room.gameType === 'CODENAMES' && room.gameData.teams) {
+               ['red', 'blue'].forEach(color => {
+                   // Atualiza Espião
+                   if (room.gameData.teams[color].spymaster === oldSocketId) {
+                       room.gameData.teams[color].spymaster = socket.id;
+                       gameDataUpdated = true;
+                   }
+                   // Atualiza Membro na lista
+                   const mIdx = room.gameData.teams[color].members.indexOf(oldSocketId);
+                   if (mIdx !== -1) {
+                       room.gameData.teams[color].members[mIdx] = socket.id;
+                       gameDataUpdated = true;
+                   }
+               });
+           }
+       }
+
+       console.log(`[RECONECTOU] ${nickname} -> ${roomId}`);
        
-       // Envia TUDO que ele precisa para voltar ao jogo onde parou
+       // Envia estado ATUAL para quem voltou
        socket.emit('joined_room', { 
          roomId, 
          isHost: room.players[existingIndex].isHost, 
          players: room.players, 
          phase: room.phase, 
-         theme: room.currentTheme,
-         mySecretNumber: room.players[existingIndex].secretNumber // Recupera a carta dele
+         gameType: room.gameType,
+         gameData: room.gameData, 
+         mySecretNumber: room.players[existingIndex].secretNumber 
        });
        
-       // Avisa a sala que ele voltou
+       // 4. IMPORTANTE: Avisa TODOS que os dados mudaram (Resolve bugs visuais)
        io.to(roomId).emit('update_players', room.players);
-       
+       if(gameDataUpdated) {
+           io.to(roomId).emit('update_game_data', { gameData: room.gameData, phase: room.phase });
+       }
+
     } else {
-       // Se não achou ninguém com esse nome, tenta entrar como novo
        joinRoomInternal(socket, roomId, nickname, false);
     }
   });
 
-  // --- 4. EXPULSAR JOGADOR (KICK) ---
-  socket.on('kick_player', ({ roomId, targetId }) => {
-    const room = rooms.get(roomId);
-    if (!room) return;
-    if (room.host !== socket.id) return; // Segurança: só Host expulsa
 
-    // Remove da lista
-    room.players = room.players.filter(p => p.id !== targetId);
-    
-    // Avisa o expulso e força saída
-    io.to(targetId).emit('kicked', 'Você foi removido da sala.');
-    const targetSocket = io.sockets.sockets.get(targetId);
-    if (targetSocket) targetSocket.leave(roomId);
-
-    // Atualiza a sala
-    io.to(roomId).emit('update_players', room.players);
-  });
-
-  // --- 5. LÓGICA DO JOGO (INÍCIO) ---
-  const startGameLogic = (roomId) => {
-    const room = rooms.get(roomId);
-    if (!room) return;
-
-    const deck = generateDeck();
-    
-    // Sorteia tema do arquivo JSON
-    room.currentTheme = THEMES[Math.floor(Math.random() * THEMES.length)];
-    room.phase = 'CLUE_PHASE';
-    
-    // Distribui cartas e reseta estados
-    room.players.forEach((player) => {
-      player.secretNumber = deck.pop(); 
-      player.clue = '';
-      player.hasSubmitted = false;
-      player.isCorrect = null;
-    });
-
-    // Envia dados gerais para todos
-    io.to(roomId).emit('game_started', {
-      phase: room.phase,
-      theme: room.currentTheme,
-      players: room.players.map(p => ({ 
-        id: p.id, nickname: p.nickname, isHost: p.isHost, hasSubmitted: false 
-      }))
-    });
-
-    // Envia o segredo APENAS para cada jogador específico
-    room.players.forEach((player) => {
-      io.to(player.id).emit('your_secret_number', player.secretNumber);
-    });
-  };
-
+  // ================= ROTEADOR DE JOGOS =================
   socket.on('start_game', ({ roomId }) => {
     const room = rooms.get(roomId);
-    if (room && room.host === socket.id) startGameLogic(roomId);
+    if (!room || room.host !== socket.id) return;
+    if (room.gameType === 'ITO') startIto(room, roomId);
+    else if (room.gameType === 'CHA_CAFE') startChaCafe(room, roomId);
+    else if (room.gameType === 'CODENAMES') startCodenamesSetup(room, roomId);
   });
 
   socket.on('restart_game', ({ roomId }) => {
-    const room = rooms.get(roomId);
-    if (room && room.host === socket.id) startGameLogic(roomId);
-  });
-
-  // --- 6. RECEBER DICAS ---
-  socket.on('submit_clue', ({ roomId, clue }) => {
-    const room = rooms.get(roomId);
-    if (!room) return;
-
-    const player = room.players.find(p => p.id === socket.id);
-    if (player) {
-      player.clue = clue;
-      player.hasSubmitted = true;
-      
-      // Verifica se todos já enviaram
-      const allReady = room.players.every(p => p.hasSubmitted);
-
-      if (allReady) {
-        room.phase = 'ORDERING';
-        // Envia todas as dicas para todos
-        io.to(roomId).emit('phase_change', { phase: 'ORDERING', players: room.players });
-      } else {
-        // Apenas avisa que fulano terminou
-        io.to(roomId).emit('player_submitted', { playerId: socket.id });
+      const room = rooms.get(roomId);
+      if(room && room.host === socket.id) {
+          if(room.gameType === 'ITO') startIto(room, roomId);
+          if(room.gameType === 'CHA_CAFE') startChaCafe(room, roomId);
+          if(room.gameType === 'CODENAMES') startCodenamesSetup(room, roomId);
       }
-    }
   });
 
-  // --- 7. ORDENAÇÃO DAS CARTAS (Drag & Drop) ---
+
+  // ================= LÓGICA: ITO =================
+  const startIto = (room, roomId) => {
+    const deck = generateDeck();
+    room.gameData = { theme: THEMES_ITO[Math.floor(Math.random() * THEMES_ITO.length)] };
+    room.phase = 'GAME'; 
+    room.players.forEach(p => { p.secretNumber = deck.pop(); p.clue = ''; p.hasSubmitted = false; });
+    io.to(roomId).emit('game_started', { gameType: 'ITO', phase: 'CLUE_PHASE', gameData: room.gameData, players: room.players });
+    room.players.forEach(p => io.to(p.id).emit('your_secret_number', p.secretNumber));
+  };
+  socket.on('submit_clue', ({ roomId, clue }) => {
+     const room = rooms.get(roomId); if(!room) return;
+     const p = room.players.find(x => x.id === socket.id);
+     if(p) {
+         p.clue = clue; p.hasSubmitted = true;
+         if(room.players.every(x => x.hasSubmitted)) {
+             io.to(roomId).emit('phase_change', { phase: 'ORDERING', players: room.players });
+         } else {
+             io.to(roomId).emit('player_submitted', { playerId: socket.id });
+         }
+     }
+  });
   socket.on('update_order', ({ roomId, newOrderIds }) => {
-    const room = rooms.get(roomId);
-    if (!room) return;
-    
+    const room = rooms.get(roomId); if(!room) return;
     const reordered = [];
-    newOrderIds.forEach(id => {
-      const p = room.players.find(pl => pl.id === id);
-      if (p) reordered.push(p);
-    });
+    newOrderIds.forEach(id => { const p = room.players.find(pl => pl.id === id); if(p) reordered.push(p); });
     room.players = reordered;
-    
-    // Reenvia a nova ordem para sincronizar telas
     socket.to(roomId).emit('order_updated', room.players);
   });
-
-  // --- 8. REVELAÇÃO FINAL ---
   socket.on('reveal_cards', ({ roomId }) => {
-    const room = rooms.get(roomId);
-    
-    // Validações de segurança
-    if (!room) {
-      socket.emit('error_msg', 'Sala não encontrada.');
-      return;
-    }
-    if (room.host !== socket.id) {
-      socket.emit('error_msg', 'Apenas o Host pode revelar!');
-      return;
-    }
-    
+    const room = rooms.get(roomId); if(!room || room.host !== socket.id) return;
     room.phase = 'REVEAL';
-    
-    // Calcula ordem perfeita (menor para maior)
     const perfectOrder = [...room.players].sort((a, b) => a.secretNumber - b.secretNumber);
-    
     let totalScore = 0;
     const results = room.players.map((player, index) => {
       const isCorrect = player.id === perfectOrder[index].id;
       if (isCorrect) totalScore++;
       return { ...player, isCorrect, secretNumber: player.secretNumber };
     });
-
     io.to(roomId).emit('game_over', { results, totalScore, maxScore: room.players.length });
   });
 
-  // --- 9. CHAT ---
-  socket.on('send_message', ({ roomId, message, nickname }) => {
-    io.to(roomId).emit('receive_message', { 
-      id: Math.random().toString(36).substr(2, 9),
-      text: message, 
-      nickname, 
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    });
+
+  // ================= LÓGICA: CHÁ OU CAFÉ =================
+  const startChaCafe = (room, roomId) => {
+    const targetWord = WORDS_CHACAFE[Math.floor(Math.random() * WORDS_CHACAFE.length)];
+    // Evita repetir narrador
+    let candidates = room.players;
+    if (room.gameData && room.gameData.narratorId && room.players.length > 1) {
+        candidates = room.players.filter(p => p.id !== room.gameData.narratorId);
+    }
+    const narrator = candidates[Math.floor(Math.random() * candidates.length)];
+    const guessers = room.players.filter(p => p.id !== narrator.id);
+    room.gameData = { targetWord, narratorId: narrator.id, currentWord: "Chá", challengerWord: "Café", turnIndex: 0, guessersIds: guessers.map(p => p.id), lastGuesserId: null, roundCount: 1, hint: null };
+    room.phase = 'JUDGING'; 
+    io.to(roomId).emit('game_started', { gameType: 'CHA_CAFE', phase: 'JUDGING', gameData: room.gameData, players: room.players });
+  };
+  socket.on('cc_judge', ({ roomId, winnerWord }) => {
+      const room = rooms.get(roomId); if (!room || room.gameData.narratorId !== socket.id) return;
+      const data = room.gameData;
+      if (winnerWord.toLowerCase() === data.targetWord.toLowerCase()) {
+          room.phase = 'VICTORY';
+          io.to(roomId).emit('game_over', { winnerWord, targetWord: data.targetWord, winnerPlayer: room.players.find(p => p.id === data.lastGuesserId)?.nickname || "Ninguém" });
+          return;
+      }
+      data.currentWord = winnerWord; data.challengerWord = null; data.roundCount = (data.roundCount || 1) + 1; room.phase = 'GUESSING';
+      io.to(roomId).emit('update_game_data', { gameData: data, phase: 'GUESSING' });
+  });
+  socket.on('cc_guess', ({ roomId, word }) => {
+      const room = rooms.get(roomId); if(!room) return;
+      const data = room.gameData;
+      data.challengerWord = word; data.lastGuesserId = socket.id; data.turnIndex = (data.turnIndex + 1) % data.guessersIds.length; room.phase = 'JUDGING';
+      io.to(roomId).emit('update_game_data', { gameData: data, phase: 'JUDGING' });
+  });
+  socket.on('cc_give_hint', ({ roomId, hint }) => {
+      const room = rooms.get(roomId); if(!room) return;
+      room.gameData.hint = hint; 
+      io.to(roomId).emit('update_game_data', { gameData: room.gameData, phase: room.phase });
   });
 
-  // --- 10. DESCONEXÃO INTELIGENTE ---
-  socket.on('disconnect', () => {
-    rooms.forEach((room, roomId) => {
-      const pIndex = room.players.findIndex(p => p.id === socket.id);
-      
-      if (pIndex !== -1) {
-        // SE ESTIVER NO LOBBY: Remove imediatamente (não faz sentido segurar vaga)
-        if (room.phase === 'LOBBY') {
-            room.players.splice(pIndex, 1);
-            if (room.players.length === 0) {
-                rooms.delete(roomId); // Sala vazia = delete
-            } else {
-                // Se o Host saiu, passa a coroa para o próximo
-                if (socket.id === room.host) {
-                    room.host = room.players[0].id;
-                    room.players[0].isHost = true;
-                }
-                io.to(roomId).emit('update_players', room.players);
-            }
-        } 
-        // SE O JOGO JÁ COMEÇOU: NÃO REMOVE DA LISTA!
-        // Mantemos os dados lá para que o 'rejoin_room' possa recuperar 
-        // as cartas e dicas quando o usuário der F5 ou voltar do bloqueio.
-        // O jogador fica "fantasma" até reconectar ou a sala ser deletada manualmente.
+
+  // ================= LÓGICA: CÓDIGO SECRETO (CODENAMES) =================
+  
+  // 1. SETUP (CORRIGIDO: AGORA TEM PHASE='SETUP')
+  const startCodenamesSetup = (room, roomId) => {
+      room.gameData = {
+          teams: { red: { spymaster: null, members: [] }, blue: { spymaster: null, members: [] } },
+          grid: [], 
+          turn: null, 
+          score: { red: 0, blue: 0 }, 
+          hint: { word: '', count: 0 }, 
+          guessesCount: 0, 
+          winner: null,
+          phase: 'SETUP' // <--- Fix da Tela em Branco
+      };
+      room.phase = 'GAME'; 
+      io.to(roomId).emit('game_started', { gameType: 'CODENAMES', phase: 'SETUP', gameData: room.gameData, players: room.players });
+  };
+
+  // 2. ENTRAR EM TIME
+  socket.on('cn_join_team', ({ roomId, team }) => {
+      const room = rooms.get(roomId); if (!room) return;
+      room.gameData.teams.red.members = room.gameData.teams.red.members.filter(id => id !== socket.id);
+      room.gameData.teams.blue.members = room.gameData.teams.blue.members.filter(id => id !== socket.id);
+      if(room.gameData.teams.red.spymaster === socket.id) room.gameData.teams.red.spymaster = null;
+      if(room.gameData.teams.blue.spymaster === socket.id) room.gameData.teams.blue.spymaster = null;
+      room.gameData.teams[team].members.push(socket.id);
+      io.to(roomId).emit('update_game_data', { gameData: room.gameData, phase: 'SETUP' });
+  });
+
+  // 3. VIRAR ESPIÃO
+  socket.on('cn_become_spymaster', ({ roomId, team }) => {
+      const room = rooms.get(roomId); if (!room) return;
+      if(!room.gameData.teams[team].members.includes(socket.id)) {
+          const otherTeam = team === 'red' ? 'blue' : 'red';
+          room.gameData.teams[otherTeam].members = room.gameData.teams[otherTeam].members.filter(id => id !== socket.id);
+          room.gameData.teams[team].members.push(socket.id);
       }
-    });
+      room.gameData.teams[team].spymaster = socket.id;
+      io.to(roomId).emit('update_game_data', { gameData: room.gameData, phase: 'SETUP' });
+  });
+
+  // 4. INICIAR PARTIDA
+  socket.on('cn_start_match', ({ roomId }) => {
+      const room = rooms.get(roomId); if(!room || room.host !== socket.id) return;
+      const startingTeam = Math.random() < 0.5 ? 'red' : 'blue';
+      const secondTeam = startingTeam === 'red' ? 'blue' : 'red';
+      const cards = [];
+      for(let i=0; i<9; i++) cards.push({ type: startingTeam, revealed: false });
+      for(let i=0; i<8; i++) cards.push({ type: secondTeam, revealed: false });
+      cards.push({ type: 'assassin', revealed: false });
+      for(let i=0; i<7; i++) cards.push({ type: 'neutral', revealed: false });
+      const shuffledCards = shuffle(cards);
+      const gameWords = shuffle([...WORDS_CODENAMES]).slice(0, 25);
+      const grid = gameWords.map((word, i) => ({
+          id: i, word: word, type: shuffledCards[i].type, revealed: false
+      }));
+      room.gameData.grid = grid; room.gameData.turn = startingTeam; room.gameData.phase = 'HINT'; 
+      room.gameData.guessesCount = 0; room.gameData.score = { red: startingTeam === 'red' ? 9 : 8, blue: startingTeam === 'blue' ? 9 : 8 }; 
+      io.to(roomId).emit('update_game_data', { gameData: room.gameData, phase: 'HINT' });
+  });
+
+  // 5. DAR DICA (FIX: CONVERSÃO DE INTEIRO PARA EVITAR ERRO DE N+1)
+  socket.on('cn_give_hint', ({ roomId, word, count }) => {
+      const room = rooms.get(roomId); if(!room) return;
+      const currentTeam = room.gameData.turn;
+      if (room.gameData.teams[currentTeam].spymaster !== socket.id) return;
+
+      // Garante que é número
+      let numericCount = parseInt(count, 10);
+      if (isNaN(numericCount) || numericCount < 0) numericCount = 1;
+
+      console.log(`[CODENAMES] Dica: ${word} (${numericCount})`);
+
+      room.gameData.hint = { word, count: numericCount };
+      room.gameData.guessesCount = 0; 
+      room.gameData.phase = 'GUESSING';
+      io.to(roomId).emit('update_game_data', { gameData: room.gameData, phase: 'GUESSING' });
+  });
+
+  // 6. CLICAR CARTA (COM LÓGICA CORRIGIDA DE FIM DE TURNO)
+  socket.on('cn_click_card', ({ roomId, cardId }) => {
+      const room = rooms.get(roomId); if(!room) return;
+      const card = room.gameData.grid[cardId];
+      if (card.revealed) return; 
+
+      card.revealed = true;
+      const currentTeam = room.gameData.turn;
+      const enemyTeam = currentTeam === 'red' ? 'blue' : 'red';
+      let turnEnds = false;
+
+      if (card.type === 'assassin') {
+          console.log(`[CODENAMES] Assassino!`);
+          endCodenames(roomId, enemyTeam); return;
+
+      } else if (card.type === currentTeam) {
+          // ACERTOU
+          room.gameData.score[currentTeam]--;
+          if (room.gameData.score[currentTeam] === 0) {
+              endCodenames(roomId, currentTeam); return;
+          }
+
+          // CONTAGEM DE PALPITES
+          const currentCount = (room.gameData.guessesCount || 0) + 1;
+          room.gameData.guessesCount = currentCount;
+          
+          // REGRA N+1
+          const maxGuesses = (room.gameData.hint.count || 0) + 1; 
+
+          console.log(`[CODENAMES] Palpites: ${currentCount} / Limite: ${maxGuesses}`);
+          
+          if (currentCount >= maxGuesses) {
+              console.log(`[CODENAMES] Limite atingido. Passando vez.`);
+              turnEnds = true;
+          }
+
+      } else if (card.type === 'neutral') {
+          turnEnds = true;
+
+      } else if (card.type === enemyTeam) {
+          room.gameData.score[enemyTeam]--;
+          turnEnds = true;
+          if (room.gameData.score[enemyTeam] === 0) {
+              endCodenames(roomId, enemyTeam); return;
+          }
+      }
+
+      if (turnEnds) cnEndTurn(room);
+      io.to(roomId).emit('update_game_data', { gameData: room.gameData, phase: room.gameData.phase });
+  });
+
+  socket.on('cn_pass_turn', ({ roomId }) => {
+      const room = rooms.get(roomId); if(room) {
+          cnEndTurn(room);
+          io.to(roomId).emit('update_game_data', { gameData: room.gameData, phase: room.gameData.phase });
+      }
+  });
+
+  const cnEndTurn = (room) => {
+      room.gameData.turn = room.gameData.turn === 'red' ? 'blue' : 'red';
+      room.gameData.phase = 'HINT';
+      room.gameData.hint = { word: '', count: 0 };
+      room.gameData.guessesCount = 0;
+  };
+
+  const endCodenames = (roomId, winnerTeam) => {
+      const room = rooms.get(roomId);
+      room.gameData.phase = 'GAME_OVER';
+      room.gameData.winner = winnerTeam;
+      room.gameData.grid.forEach(c => c.revealed = true);
+      io.to(roomId).emit('update_game_data', { gameData: room.gameData, phase: 'GAME_OVER' });
+  };
+
+
+  // ================= UTILITÁRIOS GERAIS =================
+  socket.on('send_message', (data) => io.to(data.roomId).emit('receive_message', data));
+  socket.on('kick_player', ({roomId, targetId}) => {
+    const room = rooms.get(roomId); if (!room || room.host !== socket.id) return;
+    room.players = room.players.filter(p => p.id !== targetId);
+    io.to(targetId).emit('kicked'); 
+    const s = io.sockets.sockets.get(targetId); if(s) s.leave(roomId);
+    io.to(roomId).emit('update_players', room.players);
+  });
+  socket.on('disconnect', () => {
+     rooms.forEach((room, roomId) => {
+         const idx = room.players.findIndex(p => p.id === socket.id);
+         if(idx !== -1 && room.phase === 'LOBBY') {
+             room.players.splice(idx, 1);
+             if(room.players.length === 0) rooms.delete(roomId);
+             else {
+                 if(room.host === socket.id && room.players.length > 0) {
+                     room.host = room.players[0].id; room.players[0].isHost = true;
+                 }
+                 io.to(roomId).emit('update_players', room.players);
+             }
+         }
+     });
   });
 });
 
-// --- FUNÇÃO AUXILIAR: ENTRAR NA SALA ---
 function joinRoomInternal(socket, roomId, nickname, isHost) {
   if (!roomId) return;
   const room = rooms.get(roomId.toUpperCase());
-  
-  if (!room) { 
-    socket.emit('error_msg', 'Sala não encontrada. Verifique o código.'); 
-    return; 
-  }
-  
-  // Anti-Duplicidade: Verifica se já tem alguém com esse socket ou esse Nickname
-  const isDuplicate = room.players.some(p => p.id === socket.id || (p.nickname === nickname && p.id !== socket.id));
-  
-  if (isDuplicate) {
-    // Se for duplicado, não faz nada (o cliente lá trata ou apenas reconecta)
-    return;
-  }
-
+  if (!room) { socket.emit('error_msg', 'Sala não encontrada'); return; }
+  const isDuplicate = room.players.some(p => p.id === socket.id || (p.nickname === nickname && p.id !== socket.id)); if (isDuplicate) return;
   const newPlayer = { id: socket.id, nickname, isHost, secretNumber: null, clue: '', hasSubmitted: false };
   room.players.push(newPlayer);
-  
   socket.join(roomId);
+  socket.emit('joined_room', { roomId, isHost, players: room.players, gameType: room.gameType, phase: room.phase, gameData: room.gameData });
   io.to(roomId).emit('update_players', room.players);
-  socket.emit('joined_room', { 
-    roomId, 
-    isHost, 
-    players: room.players, 
-    phase: room.phase, 
-    theme: room.currentTheme 
-  });
 }
 
-server.listen(3001, '0.0.0.0', () => console.log('SERVIDOR RODANDO NA PORTA 3001'));
+server.listen(3001, '0.0.0.0', () => console.log('SERVIDOR ONLINE 3001'));
