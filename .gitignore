@@ -1,0 +1,15 @@
+# Pastas pesadas que são instaladas automaticamente
+node_modules
+/client/node_modules
+/server/node_modules
+
+# Arquivos de construção (Build)
+dist
+build
+
+# Arquivos de sistema e logs
+.DS_Store
+*.log
+
+# Arquivos de variáveis de ambiente (segurança)
+.env
