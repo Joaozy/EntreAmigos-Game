@@ -11,6 +11,7 @@ const io = new Server(server, {
   cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
+// Temas do jogo
 const THEMES = [
   { id: 1, title: "Coisas para levar numa ilha deserta", min: "Inútil", max: "Essencial" },
   { id: 2, title: "Animais perigosos", min: "Inofensivo", max: "Mortal" },
@@ -34,9 +35,10 @@ const generateDeck = () => {
 io.on('connection', (socket) => {
   console.log(`[CONEXÃO] Jogador conectado: ${socket.id}`);
 
+  // --- LOGICA DE SALA ---
   socket.on('create_room', ({ nickname }) => {
     const roomId = Math.random().toString(36).substring(2, 6).toUpperCase();
-    console.log(`[CRIAR] Sala ${roomId} criada por ${nickname} (${socket.id})`);
+    console.log(`[CRIAR] Sala ${roomId} criada por ${nickname}`);
     
     rooms.set(roomId, {
       id: roomId,
@@ -50,11 +52,10 @@ io.on('connection', (socket) => {
   });
 
   socket.on('join_room', ({ roomId, nickname }) => {
-    // Garante que o ID seja sempre Uppercase para evitar erros de digitação
     joinRoomInternal(socket, roomId?.toUpperCase(), nickname, false);
   });
 
-  // Função lógica de início
+  // --- LÓGICA DE JOGO ---
   const startGameLogic = (roomId) => {
     const room = rooms.get(roomId);
     if (!room) return;
@@ -132,23 +133,14 @@ io.on('connection', (socket) => {
     })));
   });
 
-  // --- AQUI ESTAVA O PROBLEMA SILENCIOSO ---
   socket.on('reveal_cards', ({ roomId }) => {
-    console.log(`[REVELAR] Tentativa na sala ${roomId} pelo socket ${socket.id}`);
-    
     const room = rooms.get(roomId);
-    
-    // 1. Verifica se a sala existe
     if (!room) {
-      console.error(`[ERRO] Sala ${roomId} não encontrada!`);
-      socket.emit('error_msg', 'Sala não encontrada! Crie uma nova.');
+      socket.emit('error_msg', 'Sala não encontrada! Recarregue a página.');
       return;
     }
-
-    // 2. Verifica se quem clicou é o HOST
     if (room.host !== socket.id) {
-      console.error(`[ERRO] Acesso negado. Host: ${room.host}, Tentativa: ${socket.id}`);
-      socket.emit('error_msg', 'Apenas o Host pode revelar as cartas!');
+      socket.emit('error_msg', 'Apenas o Host pode revelar!');
       return;
     }
     
@@ -162,8 +154,19 @@ io.on('connection', (socket) => {
       return { ...player, isCorrect, secretNumber: player.secretNumber };
     });
 
-    console.log(`[SUCESSO] Cartas reveladas na sala ${roomId}`);
     io.to(roomId).emit('game_over', { results, totalScore, maxScore: room.players.length });
+  });
+
+  // --- LÓGICA DO CHAT (Estava faltando ou incorreta) ---
+  socket.on('send_message', ({ roomId, message, nickname }) => {
+    console.log(`[CHAT] ${nickname} disse: ${message}`);
+    // Envia para TODOS da sala (incluindo quem mandou)
+    io.to(roomId).emit('receive_message', { 
+      id: Math.random().toString(36).substr(2, 9),
+      text: message, 
+      nickname, 
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    });
   });
 
   socket.on('disconnect', () => {
@@ -171,7 +174,6 @@ io.on('connection', (socket) => {
       room.players = room.players.filter(p => p.id !== socket.id);
       if (room.players.length === 0) {
         rooms.delete(roomId);
-        console.log(`[SALA APAGADA] Sala ${roomId} vazia.`);
       } else {
         io.to(roomId).emit('update_players', room.players);
       }
@@ -181,10 +183,10 @@ io.on('connection', (socket) => {
 
 function joinRoomInternal(socket, roomId, nickname, isHost) {
   if (!roomId) return;
-  const room = rooms.get(roomId.toUpperCase()); // Garante uppercase
+  const room = rooms.get(roomId.toUpperCase());
   
   if (!room) {
-    socket.emit('error_msg', 'Sala não encontrada. Verifique o código.');
+    socket.emit('error_msg', 'Sala não encontrada.');
     return;
   }
   
