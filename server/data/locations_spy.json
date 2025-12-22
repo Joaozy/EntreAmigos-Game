@@ -1,22 +1,47 @@
 [
-  "Hospital",
-  "Avião",
-  "Praia",
-  "Escola",
-  "Navio Pirata",
-  "Estação Espacial",
-  "Circo",
-  "Banco",
-  "Cassino",
-  "Hotel",
-  "Restaurante",
-  "Supermercado",
-  "Teatro",
-  "Universidade",
-  "Zoológico",
-  "Submarino",
-  "Base Militar",
-  "Delegacia",
-  "Estádio de Futebol",
-  "Cinema"
+  {
+    "category": "LUGAR",
+    "words": ["Praia", "Escola", "Hospital", "Cinema", "Supermercado", "Cemitério", "Estádio", "Restaurante", "Zoológico", "Delegacia", "Igreja", "Academia", "Aeroporto", "Banheiro Público", "Shopping", "Biblioteca"],
+    "questions": [
+      "Como costuma ser o cheiro deste lugar?",
+      "Que tipo de roupa as pessoas usam para ir aí?",
+      "É um lugar onde se passa muito ou pouco tempo?"
+    ]
+  },
+  {
+    "category": "COMIDA",
+    "words": ["Pizza", "Sushi", "Churrasco", "Feijoada", "Sorvete", "Lasanha", "Hambúrguer", "Salada", "Sopa", "Chocolate", "Pipoca", "Ovo Frito", "Macarrão", "Bolo"],
+    "questions": [
+      "Em que ocasião costumamos comer isso?",
+      "É algo que se come quente ou frio?",
+      "Faz muita sujeira para comer?"
+    ]
+  },
+  {
+    "category": "ANIMAL",
+    "words": ["Cachorro", "Gato", "Leão", "Elefante", "Tubarão", "Águia", "Girafa", "Pinguim", "Cobra", "Macaco", "Vaca", "Cavalo", "Sapo", "Formiga"],
+    "questions": [
+      "Onde esse animal costuma viver?",
+      "Ele é perigoso para humanos?",
+      "Qual é a característica física mais marcante dele?"
+    ]
+  },
+  {
+    "category": "PESSOA FAMOSA",
+    "words": ["Neymar", "Silvio Santos", "Faustão", "Anitta", "Messi", "Pelé", "Xuxa", "Gugu", "Bolsonaro", "Lula", "Homem-Aranha", "Batman", "Mickey Mouse", "Jesus Cristo"],
+    "questions": [
+      "Por que essa pessoa é famosa?",
+      "Ela ainda está viva (ou ativa)?",
+      "Se você encontrasse essa pessoa na rua, o que faria?"
+    ]
+  },
+  {
+    "category": "OBJETO",
+    "words": ["Celular", "Guarda-Chuva", "Sapato", "Escova de Dentes", "Chave", "Óculos", "Relógio", "Caneta", "Garrafa", "Controle Remoto", "Cadeira", "Travesseiro"],
+    "questions": [
+      "Para que serve esse objeto principalmente?",
+      "Ele cabe no bolso?",
+      "É algo caro ou barato?"
+    ]
+  }
 ]
