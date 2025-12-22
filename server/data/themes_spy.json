@@ -1,47 +1,112 @@
 [
   {
     "category": "LUGAR",
-    "words": ["Praia", "Escola", "Hospital", "Cinema", "Supermercado", "Cemitério", "Estádio", "Restaurante", "Zoológico", "Delegacia", "Igreja", "Academia", "Aeroporto", "Banheiro Público", "Shopping", "Biblioteca"],
+    "words": ["Praia", "Escola", "Hospital", "Cinema", "Supermercado", "Cemitério", "Estádio", "Restaurante", "Zoológico", "Delegacia", "Igreja", "Academia", "Aeroporto", "Banheiro Público", "Shopping", "Biblioteca", "Parque de Diversões", "Museu", "Motel", "Padaria"],
     "questions": [
-      "Como costuma ser o cheiro deste lugar?",
-      "Que tipo de roupa as pessoas usam para ir aí?",
-      "É um lugar onde se passa muito ou pouco tempo?"
+      "Se esse lugar tivesse uma trilha sonora, que estilo de música tocaria?",
+      "Qual é a pior coisa que poderia acontecer se você fosse vestido de palhaço para cá?",
+      "Se você tivesse que passar a noite trancado aqui, qual seria seu maior medo?",
+      "Que tipo de conversa as pessoas costumam ter neste ambiente?",
+      "Se esse lugar fosse uma pessoa, ela seria amigável ou intimidadora?",
+      "Qual é o cheiro mais característico que você sente ao entrar aqui?",
+      "O que você jamais levaria dentro da bolsa para um lugar desses?",
+      "Se você encontrasse sua sogra aqui, seria uma situação estranha?",
+      "Como você descreveria a iluminação deste lugar?",
+      "Que tipo de emoção as pessoas geralmente sentem ao sair daqui?",
+      "Se fosse proibido falar neste lugar, como as pessoas se comunicariam?",
+      "Que tipo de profissional é indispensável para este lugar funcionar?",
+      "Se esse lugar deixasse de existir amanhã, quem sentiria mais falta?",
+      "É um lugar onde você se sente mais livre ou mais vigiado?",
+      "Se você pudesse mudar uma regra deste lugar, qual seria?",
+      "Que tipo de comida combinaria perfeitamente com este ambiente?"
     ]
   },
   {
     "category": "COMIDA",
-    "words": ["Pizza", "Sushi", "Churrasco", "Feijoada", "Sorvete", "Lasanha", "Hambúrguer", "Salada", "Sopa", "Chocolate", "Pipoca", "Ovo Frito", "Macarrão", "Bolo"],
+    "words": ["Pizza", "Sushi", "Churrasco", "Feijoada", "Sorvete", "Lasanha", "Hambúrguer", "Salada", "Sopa", "Chocolate", "Pipoca", "Ovo Frito", "Macarrão", "Bolo", "Pão de Queijo", "Açaí", "Pastel", "Cuscuz", "Strogonoff", "Batata Frita"],
     "questions": [
-      "Em que ocasião costumamos comer isso?",
-      "É algo que se come quente ou frio?",
-      "Faz muita sujeira para comer?"
+      "Se essa comida fosse uma pessoa, quão elegante ela seria?",
+      "Em que situação constrangedora seria difícil comer isso?",
+      "Se você tivesse que comer só isso pelo resto da vida, quanto tempo duraria?",
+      "Que bebida arruinaria completamente o gosto dessa comida?",
+      "Se você fosse descrever a textura disso para um alienígena, o que diria?",
+      "Essa comida combina mais com um dia de chuva ou um dia de sol?",
+      "Se essa comida fosse um filme, seria comédia, drama ou terror?",
+      "Qual a pior hora do dia para comer isso?",
+      "Se você derrubasse isso na sua roupa, a mancha seria um desastre?",
+      "Essa comida traz alguma memória de infância para a maioria das pessoas?",
+      "Se você servisse isso em um casamento chique, as pessoas achariam estranho?",
+      "Você precisaria de muita habilidade para preparar isso do zero?",
+      "Que som você faz ao comer isso?",
+      "Isso é o tipo de coisa que a gente come escondido ou posta foto no Instagram?",
+      "Se isso fosse proibido por lei, você compraria no mercado negro?",
+      "Qual é o acompanhamento mais polêmico para essa comida?"
     ]
   },
   {
     "category": "ANIMAL",
-    "words": ["Cachorro", "Gato", "Leão", "Elefante", "Tubarão", "Águia", "Girafa", "Pinguim", "Cobra", "Macaco", "Vaca", "Cavalo", "Sapo", "Formiga"],
+    "words": ["Cachorro", "Gato", "Leão", "Elefante", "Tubarão", "Águia", "Girafa", "Pinguim", "Cobra", "Macaco", "Vaca", "Cavalo", "Sapo", "Formiga", "Urso", "Baleia", "Jacaré", "Papagaio", "Lobo", "Tigre"],
     "questions": [
-      "Onde esse animal costuma viver?",
-      "Ele é perigoso para humanos?",
-      "Qual é a característica física mais marcante dele?"
+      "Se esse animal pudesse falar, sobre o que ele reclamaria o dia todo?",
+      "Que profissão humana esse animal exerceria se trabalhasse?",
+      "Se você encontrasse esse animal na sua cozinha, qual seria sua reação?",
+      "Se esse animal fosse um super-herói, qual seria o poder dele?",
+      "Você confiaria nesse animal para cuidar de uma criança?",
+      "Se tivesse que lutar contra ele, qual seria sua estratégia?",
+      "Que tipo de música combina com o jeito de andar desse animal?",
+      "Se esse animal usasse roupas, que peça não poderia faltar?",
+      "Você acha que esse animal julga os humanos?",
+      "Se você pudesse ter o tamanho desse animal, o que faria?",
+      "Qual seria o nome perfeito para um animal desses?",
+      "Se esse animal fosse um veículo, ele seria um tanque ou uma moto?",
+      "O que esse animal provavelmente pensa quando vê um ser humano?",
+      "Se ele participasse de uma Olimpíada, em qual esporte ganharia ouro?",
+      "Esse animal seria um bom vilão de filme?",
+      "Se você tivesse que imitar o som dele agora, passaria vergonha?"
     ]
   },
   {
     "category": "PESSOA FAMOSA",
-    "words": ["Neymar", "Silvio Santos", "Faustão", "Anitta", "Messi", "Pelé", "Xuxa", "Gugu", "Bolsonaro", "Lula", "Homem-Aranha", "Batman", "Mickey Mouse", "Jesus Cristo"],
+    "words": ["Neymar", "Silvio Santos", "Faustão", "Anitta", "Messi", "Pelé", "Xuxa", "Gugu", "Bolsonaro", "Lula", "Homem-Aranha", "Batman", "Mickey Mouse", "Jesus Cristo", "Michael Jackson", "Beyoncé", "Faustão", "Chaves", "Bob Esponja", "Harry Potter"],
     "questions": [
-      "Por que essa pessoa é famosa?",
-      "Ela ainda está viva (ou ativa)?",
-      "Se você encontrasse essa pessoa na rua, o que faria?"
+      "Se você ficasse preso no elevador com essa pessoa, qual seria o assunto?",
+      "O que essa pessoa provavelmente compra no supermercado?",
+      "Se essa pessoa te chamasse para sair, quem pagaria a conta?",
+      "Que tipo de presente essa pessoa odiaria ganhar?",
+      "Se essa pessoa fosse um animal, qual seria?",
+      "Você confiaria nessa pessoa para segurar sua carteira?",
+      "Se fizessem um filme sobre a vida dela, seria chato ou emocionante?",
+      "Essa pessoa sobreviveria a um apocalipse zumbi?",
+      "Se essa pessoa fosse professora, que matéria ela daria?",
+      "Qual seria o maior defeito dessa pessoa no dia a dia?",
+      "Se você pudesse fazer uma pergunta para ela e ela tivesse que dizer a verdade, o que perguntaria?",
+      "Essa pessoa seria boa em guardar segredos?",
+      "Se ela entrasse no BBB, seria a vilã ou a favorita?",
+      "O que essa pessoa provavelmente faz quando ninguém está olhando?",
+      "Se você trocasse de corpo com ela por um dia, o que faria primeiro?",
+      "Essa pessoa se daria bem trabalhando no McDonald's?"
     ]
   },
   {
     "category": "OBJETO",
-    "words": ["Celular", "Guarda-Chuva", "Sapato", "Escova de Dentes", "Chave", "Óculos", "Relógio", "Caneta", "Garrafa", "Controle Remoto", "Cadeira", "Travesseiro"],
+    "words": ["Celular", "Guarda-Chuva", "Sapato", "Escova de Dentes", "Chave", "Óculos", "Relógio", "Caneta", "Garrafa", "Controle Remoto", "Cadeira", "Travesseiro", "Computador", "Mochila", "Faca", "Copo", "Livro", "Espelho", "Bola", "Fone de Ouvido"],
     "questions": [
-      "Para que serve esse objeto principalmente?",
-      "Ele cabe no bolso?",
-      "É algo caro ou barato?"
+      "Se esse objeto desaparecesse do mundo hoje, quem sofreria mais?",
+      "Que tipo de pessoa se orgulha de ter um desses bem caro?",
+      "Se esse objeto pudesse sentir dor, ele sofreria muito?",
+      "Qual é o lugar mais estranho onde você já viu um desses?",
+      "Se você tivesse que usar isso como arma em uma luta, ganharia?",
+      "Esse objeto costuma ser motivo de briga entre as pessoas?",
+      "Se isso fosse comestível, que gosto teria?",
+      "Você ficaria triste se perdesse isso ou compraria outro na hora?",
+      "Se esse objeto falasse, que segredos ele contaria sobre o dono?",
+      "Isso é algo que a gente empresta ou morre de ciúmes?",
+      "Se você ganhasse um desses de presente, ficaria feliz ou decepcionado?",
+      "Esse objeto combina mais com uma pessoa organizada ou bagunceira?",
+      "Se isso fosse do tamanho de um carro, seria assustador?",
+      "Você usaria um desses que já foi usado por um desconhecido?",
+      "Isso é algo que a gente usa com carinho ou com raiva?",
+      "Se você tivesse que descrever isso para alguém de 100 anos atrás, como explicaria?"
     ]
   }
 ]
