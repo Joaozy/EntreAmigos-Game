@@ -125,12 +125,7 @@ export default function GameTable({ players, isHost, mySecretNumber, roomId, the
       {/* 2. ÁREA DA CARTA SECRETA */}
       <div className="flex justify-center mb-8 relative z-10">
         <SecretCard number={mySecretNumber || "?"} />
-        {/* Balão de instrução flutuante */}
-        {!submitted && phase === 'CLUE_PHASE' && (
-          <div className="absolute top-10 -right-4 bg-yellow-400 text-yellow-900 text-xs font-bold px-2 py-1 rounded shadow animate-bounce">
-            Clique!
-          </div>
-        )}
+
       </div>
 
       {/* 3. FASE DE DICAS */}

@@ -9,7 +9,8 @@ const gameModules = {
     'CHA_CAFE': require('./games/game_chacafe'),
     'CODENAMES': require('./games/game_codenames'),
     'STOP': require('./games/game_stop'),
-    'TERMO': require('./games/game_termo')
+    'TERMO': require('./games/game_termo'),
+    'SPY': require('./games/game_spy')
 };
 
 const app = express();

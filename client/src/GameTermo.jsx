@@ -61,11 +61,13 @@ export default function GameTermo({ players, isHost, roomId, gameData, phase }) 
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white p-2 flex flex-col md:flex-row gap-4 justify-center items-start">
+    // CORREÇÃO 1: 'items-center' para centralizar tudo e 'flex-col-reverse' para o placar ficar embaixo no celular
+    <div className="min-h-screen bg-slate-900 text-white p-2 flex flex-col-reverse md:flex-row gap-4 justify-center items-center md:items-start">
         
         {/* PLACAR LATERAL */}
-        <div className="hidden md:block w-64 bg-slate-800 p-4 rounded-xl shadow-lg mt-4">
-            <h3 className="font-bold text-slate-400 mb-4 text-xs uppercase">Placar Geral</h3>
+        {/* CORREÇÃO 2: Removido 'hidden', adicionado 'w-full max-w-sm' para mobile */}
+        <div className="w-full max-w-sm md:w-64 bg-slate-800 p-4 rounded-xl shadow-lg md:mt-4 mb-8 md:mb-0">
+            <h3 className="font-bold text-slate-400 mb-4 text-xs uppercase text-center md:text-left">Placar Geral</h3>
             <div className="space-y-3">
                 {players.sort((a,b) => (totalScores[b.id]||0) - (totalScores[a.id]||0)).map(p => {
                     const st = gameData?.playersState?.[p.id];
@@ -84,14 +86,14 @@ export default function GameTermo({ players, isHost, roomId, gameData, phase }) 
             </div>
         </div>
 
-        {/* CENTRO */}
-        <div className="flex-1 max-w-md flex flex-col items-center mt-4">
-            <div className="flex items-center justify-between w-full px-4 mb-4">
-                <h1 className="text-3xl font-black text-emerald-500 tracking-widest">TERMO</h1>
-                <div className="text-xs font-bold bg-slate-800 px-3 py-1 rounded text-slate-400">RODADA {currentRound}/5</div>
+        {/* CENTRO (JOGO) */}
+        <div className="flex-1 max-w-md flex flex-col items-center w-full">
+            <div className="flex items-center justify-between w-full px-2 mb-2 md:mb-4 mt-2">
+                <h1 className="text-2xl md:text-3xl font-black text-emerald-500 tracking-widest">TERMO</h1>
+                <div className="text-[10px] md:text-xs font-bold bg-slate-800 px-3 py-1 rounded text-slate-400">RODADA {currentRound}/5</div>
             </div>
 
-            {/* FIM DA RODADA OU JOGO */}
+            {/* MENSAGEM DE FIM DA RODADA */}
             {(phase === 'ROUND_OVER' || phase === 'VICTORY') && (
                 <div className="mb-6 bg-slate-800 p-6 rounded-2xl text-center shadow-xl animate-in zoom-in w-full">
                     {phase === 'VICTORY' ? (
@@ -104,7 +106,7 @@ export default function GameTermo({ players, isHost, roomId, gameData, phase }) 
                     ) : (
                         <>
                             <p className="text-slate-400 text-sm uppercase">A palavra era</p>
-                            <h2 className="text-4xl font-black text-white mb-4 tracking-widest">{secretWord}</h2>
+                            <h2 className="text-3xl md:text-4xl font-black text-white mb-4 tracking-widest">{secretWord}</h2>
                             <div className="text-sm text-slate-300 mb-4">
                                 {status === 'WON' ? <span className="text-emerald-400">Você acertou! (+{(() => {
                                     const len = attempts.length;
@@ -126,7 +128,7 @@ export default function GameTermo({ players, isHost, roomId, gameData, phase }) 
             )}
 
             {/* GRID */}
-            <div className="grid grid-rows-6 gap-2 mb-8">
+            <div className="grid grid-rows-6 gap-2 mb-4 md:mb-8">
                 {[...Array(6)].map((_, rowIndex) => {
                     const attempt = attempts[rowIndex];
                     const word = attempt ? attempt.word : (rowIndex === attempts.length ? currentGuess : '');
@@ -149,11 +151,12 @@ export default function GameTermo({ players, isHost, roomId, gameData, phase }) 
 
             {/* TECLADO */}
             {phase === 'PLAYING' && status === 'PLAYING' && (
-                <div className="w-full select-none">
+                <div className="w-full select-none px-1">
                     {keys.map((row, i) => (
                         <div key={i} className="flex justify-center gap-1 mb-2">
                             {row.map(key => (
-                                <button key={key} onClick={() => onKeyClick(key)} className={`w-8 h-10 md:w-10 md:h-12 rounded font-bold text-sm transition active:scale-95 ${getKeyColor(key)}`}>{key}</button>
+                                // CORREÇÃO 3: 'w-7' no mobile para caber em telas pequenas
+                                <button key={key} onClick={() => onKeyClick(key)} className={`w-7 h-10 md:w-10 md:h-12 rounded font-bold text-sm transition active:scale-95 ${getKeyColor(key)}`}>{key}</button>
                             ))}
                         </div>
                     ))}
@@ -165,8 +168,8 @@ export default function GameTermo({ players, isHost, roomId, gameData, phase }) 
             )}
             
             {status !== 'PLAYING' && phase === 'PLAYING' && (
-                <div className="text-center animate-pulse text-slate-400 mt-4">
-                    Aguardando outros jogadores...
+                <div className="text-center animate-pulse text-slate-400 mt-4 bg-slate-800 px-4 py-2 rounded-full text-xs md:text-sm">
+                    Aguardando outros jogadores terminarem...
                 </div>
             )}
         </div>
