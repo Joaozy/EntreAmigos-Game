@@ -1,15 +1,14 @@
 import { io } from 'socket.io-client';
 
-// URL de Produção (Use a que você copiou do Render)
-// Dica: Use ternário para funcionar no seu PC e na Vercel automaticamente
-const URL = import.meta.env.MODE === 'production' 
-  ? 'https://entreamigos-game.onrender.com' // <--- COLE SUA URL DO RENDER AQUI (sem a barra final /)
-  : 'http://192.168.1.61:3001';
+// Detecta automaticamente se está em dev ou prod
+const URL = import.meta.env.PROD 
+  ? 'https://entreamigos-game.onrender.com' // Sua URL de prod
+  : (import.meta.env.VITE_API_URL || 'http://localhost:3001');
 
 export const socket = io(URL, {
   autoConnect: false,
-  reconnection: true,             // Tenta reconectar sozinho
-  reconnectionAttempts: 10,       // Tenta 10 vezes antes de desistir
-  reconnectionDelay: 1000,        // Espera 1s entre tentativas
-  timeout: 20000                  // Aumenta o tempo antes de considerar "caiu"
+  reconnection: true,
+  reconnectionAttempts: 10,
+  reconnectionDelay: 1000,
+  timeout: 20000
 });
