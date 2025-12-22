@@ -6,17 +6,15 @@ import GameTable from './GameTable';
 import GameChaCafe from './GameChaCafe';     
 import GameCodenames from './GameCodenames'; 
 import GameStop from './GameStop';           
-import GameTermo from './GameTermo';
-import GameSpy from './GameSpy'; 
-import {UserSecret } from 'lucide-react';
+import GameTermo from './GameTermo'; 
+import GameSpy from './GameSpy'; // <--- IMPORTANTE: O novo jogo
 
 import Chat from './Chat';
 
-// Ícones
-import { Trash2, ArrowRight, Gamepad2, Info, Coffee, Loader2, LogOut, Eye, Hand, LayoutGrid, Users, User, Users2 } from 'lucide-react';
+// Ícones (Adicionamos UserSecret, Users, User, Users2 para as categorias e o espião)
+import { Trash2, ArrowRight, Gamepad2, Info, Coffee, Loader2, LogOut, Eye, Hand, LayoutGrid, UserSecret, User, Users, Users2 } from 'lucide-react';
 
 // --- CONFIGURAÇÃO DOS JOGOS ---
-// Aqui definimos as categorias e metadados para facilitar a renderização
 const GAMES_CONFIG = [
   { 
     id: 'TERMO', 
@@ -44,7 +42,7 @@ const GAMES_CONFIG = [
     minPlayers: 2, 
     category: 'PEQUENOS GRUPOS (2+)', 
     desc: 'Sincronia e cooperação.', 
-    icon: Gamepad2, // Trocado ? por Gamepad2 para consistência
+    icon: Gamepad2, 
     color: 'indigo',
     iconColor: 'bg-indigo-600'
   },
@@ -59,16 +57,6 @@ const GAMES_CONFIG = [
     iconColor: 'bg-pink-600'
   },
   { 
-    id: 'CODENAMES', 
-    name: 'Código Secreto', 
-    minPlayers: 4, 
-    category: 'GALERA E TIMES (4+)', 
-    desc: 'Espiões, dicas e times.', 
-    icon: Eye, 
-    color: 'teal',
-    iconColor: 'bg-teal-600'
-  },
-  { 
     id: 'SPY', 
     name: 'O Espião', 
     minPlayers: 3, 
@@ -77,6 +65,16 @@ const GAMES_CONFIG = [
     icon: UserSecret, 
     color: 'red',
     iconColor: 'bg-red-600'
+  },
+  { 
+    id: 'CODENAMES', 
+    name: 'Código Secreto', 
+    minPlayers: 4, 
+    category: 'GALERA E TIMES (4+)', 
+    desc: 'Espiões, dicas e times.', 
+    icon: Eye, 
+    color: 'teal',
+    iconColor: 'bg-teal-600'
   }
 ];
 
@@ -84,6 +82,7 @@ export default function App() {
   let savedRoom = localStorage.getItem('saved_roomId');
   let savedNick = localStorage.getItem('saved_nickname');
 
+  // Limpeza de estado inválido
   if (savedRoom && !savedNick) {
       localStorage.removeItem('saved_roomId');
       savedRoom = null;
@@ -105,13 +104,8 @@ export default function App() {
 
   const [isJoining, setIsJoining] = useState(false);
 
-  // ... (MANTENHA TODO O USEEFFECT E SOCKET LOGIC IGUAL AO ANTERIOR) ...
-  // Para economizar espaço na resposta, assumo que a lógica de socket não mudou.
-  // Se precisar, eu copio ela inteira novamente, mas o foco aqui é a UI.
-  
   useEffect(() => {
-    // ... (Código de socket connection, rejoin, listeners igual ao arquivo anterior) ...
-    // Vou resumir apenas o necessário para o componente funcionar:
+    // --- LÓGICA DE CONEXÃO E REJOIN ---
     const tentarReconectar = () => {
         const sRoom = localStorage.getItem('saved_roomId');
         const sNick = localStorage.getItem('saved_nickname');
@@ -119,37 +113,84 @@ export default function App() {
             socket.emit('rejoin_room', { roomId: sRoom, nickname: sNick });
         }
     };
+
     if (!socket.connected) socket.connect();
     else tentarReconectar(); 
+
     const onConnect = () => tentarReconectar();
     socket.on('connect', onConnect);
+    
+    // --- EVENTOS DO JOGO ---
     socket.on('joined_room', (data) => { 
       handleJoinSuccess(data.roomId, data.isHost);
       setPlayers(data.players); 
       setGameType(data.gameType);
       if(data.gameData) setGameData(data.gameData);
       if (data.mySecretNumber) setMySecret(data.mySecretNumber);
-      if (data.phase !== 'LOBBY') { setCurrentPhase(data.phase); setView('GAME'); } else { setView('LOBBY'); }
+
+      if (data.phase !== 'LOBBY') {
+        setCurrentPhase(data.phase);
+        setView('GAME');
+      } else {
+        setView('LOBBY');
+      }
     });
+
     socket.on('room_created', (id) => handleJoinSuccess(id, true));
     socket.on('update_players', (p) => setPlayers(p));
+    
     socket.on('game_started', (data) => { 
-      setPlayers(data.players); setGameType(data.gameType); setGameData(data.gameData);
-      setCurrentPhase(data.phase); setGameResult(null); setView('GAME'); 
+      setPlayers(data.players); 
+      setGameType(data.gameType); 
+      setGameData(data.gameData);
+      setCurrentPhase(data.phase);
+      setGameResult(null); 
+      setView('GAME'); 
     });
-    socket.on('update_game_data', ({ gameData, phase }) => { setGameData(gameData); setCurrentPhase(phase); });
+
+    socket.on('update_game_data', ({ gameData, phase }) => {
+        setGameData(gameData);
+        setCurrentPhase(phase);
+    });
+
+    socket.on('spy_secret', (data) => { 
+        // O GameSpy ouve isso internamente, mas podemos guardar aqui se precisarmos
+    });
+
     socket.on('your_secret_number', (n) => setMySecret(n));
     socket.on('phase_change', (data) => { setCurrentPhase(data.phase); setPlayers(data.players); });
-    socket.on('player_submitted', ({ playerId }) => { setPlayers(prev => prev.map(p => p.id === playerId ? {...p, hasSubmitted: true} : p)); });
+    socket.on('player_submitted', ({ playerId }) => {
+      setPlayers(prev => prev.map(p => p.id === playerId ? {...p, hasSubmitted: true} : p));
+    });
     socket.on('order_updated', (p) => setPlayers(p));
+    
     socket.on('game_over', (data) => {
       if(data.winnerWord || data.winner || data.secretWord) { 
           setCurrentPhase(data.phase || 'VICTORY'); 
-          setGameData(prev => ({ ...prev, ...(data.gameData || {}), targetWord: data.targetWord || prev.targetWord, secretWord: data.secretWord || prev.secretWord, winner: data.winner || prev.winner }));
-      } else if (data.results) { setGameResult(data); setPlayers(data.results); setCurrentPhase('REVEAL'); }
+          setGameData(prev => ({
+              ...prev,
+              ...(data.gameData || {}),
+              targetWord: data.targetWord || prev.targetWord,
+              secretWord: data.secretWord || prev.secretWord, 
+              winner: data.winner || prev.winner
+          }));
+      } else if (data.results) { 
+          setGameResult(data);
+          setPlayers(data.results); 
+          setCurrentPhase('REVEAL'); 
+      } else if (data.gameData && data.phase === 'REVEAL') {
+          // Caso específico do Spy
+          setGameData(data.gameData);
+          setCurrentPhase('REVEAL');
+      }
     });
+
     socket.on('kicked', () => { alert("Você foi expulso da sala."); sairDoJogo(); });
-    socket.on('error_msg', (msg) => { if (view === 'LOADING') { alert("Não foi possível voltar: " + msg); sairDoJogo(); } else { alert(msg); } setIsJoining(false); });
+    socket.on('error_msg', (msg) => {
+        if (view === 'LOADING') { alert("Não foi possível voltar: " + msg); sairDoJogo(); } else { alert(msg); }
+        setIsJoining(false);
+    });
+
     return () => { socket.off('connect', onConnect); socket.disconnect(); };
   }, []);
 
@@ -161,18 +202,18 @@ export default function App() {
   const iniciar = () => socket.emit('start_game', { roomId });
   const expulsar = (targetId) => { if(confirm("Expulsar este jogador?")) socket.emit('kick_player', { roomId, targetId }); }
 
-  // REGRAS DE MIN PLAYERS DINÂMICAS
+  // --- REGRAS DINÂMICAS DE START ---
+  // Pega a config do jogo selecionado/ativo
   const selectedGameObj = GAMES_CONFIG.find(g => g.id === selectedGame) || GAMES_CONFIG[0];
-  // No lobby, usamos o gameType que vem do servidor, se não tiver, fallback
   const activeGameId = gameType || 'ITO'; 
   const activeGameObj = GAMES_CONFIG.find(g => g.id === activeGameId) || GAMES_CONFIG[0];
+  
   const canStart = players.length >= activeGameObj.minPlayers;
 
   if (view === 'LOADING') return (<div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white p-4 text-center"><Loader2 className="w-16 h-16 animate-spin text-indigo-500 mb-4" /><h2 className="text-xl font-bold">Reconectando...</h2><button onClick={sairDoJogo} className="mt-8 text-red-400 text-sm border border-red-900/50 p-2 rounded bg-red-900/20">Cancelar</button></div>);
 
-  // --- NOVA HOME PAGE ORGANIZADA ---
+  // --- NOVA HOME PAGE COM CATEGORIAS ---
   if (view === 'HOME') {
-    // Agrupar jogos por categoria
     const categories = ['SOLO / VERSUS (1+)', 'PEQUENOS GRUPOS (2+)', 'GALERA E TIMES (4+)'];
     
     return (
@@ -224,16 +265,17 @@ export default function App() {
     );
   }
 
-  // --- TELA DE LOGIN ADAPTADA ---
+  // --- TELA DE LOGIN DINÂMICA ---
   if (view === 'LOGIN') {
       const theme = GAMES_CONFIG.find(g => g.id === selectedGame) || GAMES_CONFIG[0];
-      // Ajuste para pegar a cor correta do Tailwind (classes completas para o compilador não purgar)
+      // Mapeamento manual de cores para garantir que o Tailwind inclua no bundle
       let btnClass = "bg-slate-600";
       if(theme.color === 'indigo') btnClass = "bg-indigo-600 hover:bg-indigo-700";
       if(theme.color === 'pink') btnClass = "bg-pink-600 hover:bg-pink-700";
       if(theme.color === 'teal') btnClass = "bg-teal-600 hover:bg-teal-700";
       if(theme.color === 'purple') btnClass = "bg-purple-600 hover:bg-purple-700";
       if(theme.color === 'emerald') btnClass = "bg-emerald-600 hover:bg-emerald-700";
+      if(theme.color === 'red') btnClass = "bg-red-600 hover:bg-red-700"; // Para o Espião
 
       return (
         <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
@@ -254,7 +296,7 @@ export default function App() {
       );
   }
 
-  // --- LOBBY ---
+  // --- LOBBY DINÂMICO ---
   if (view === 'LOBBY') return (
     <div className="min-h-screen bg-slate-900 flex flex-col items-center pt-10 p-4">
       <div className="w-full max-w-md bg-white p-8 rounded-3xl shadow-2xl text-center relative animate-in zoom-in-95">
