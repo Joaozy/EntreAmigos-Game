@@ -12,6 +12,56 @@ const startStop = (io, room, roomId) => {
     startStopTimer(io, room, roomId);
 };
 
+const handleStopRejoin = (room, oldId, newId) => {
+    let updated = false;
+    const gd = room.gameData;
+    
+    // Atualiza Caller
+    if (gd.stopCaller === oldId) { gd.stopCaller = newId; updated = true; }
+    
+    // Atualiza Respostas (Migra chave do objeto)
+    if (gd.answers && gd.answers[oldId]) {
+        gd.answers[newId] = gd.answers[oldId];
+        delete gd.answers[oldId];
+        updated = true;
+    }
+
+    // Atualiza Scores Totais (Migra chave)
+    if (gd.totalScores && gd.totalScores[oldId] !== undefined) {
+        gd.totalScores[newId] = gd.totalScores[oldId];
+        delete gd.totalScores[oldId];
+        updated = true;
+    }
+    
+    // Atualiza Votos (Complexo: chave contém ID e valores contêm ID)
+    if (gd.votes) {
+        // 1. Atualizar quem votou
+        Object.keys(gd.votes).forEach(key => {
+            ['invalid', 'duplicate'].forEach(type => {
+                const idx = gd.votes[key][type].indexOf(oldId);
+                if (idx !== -1) {
+                    gd.votes[key][type][idx] = newId;
+                    updated = true;
+                }
+            });
+        });
+        
+        // 2. Atualizar chaves (se o alvo do voto mudou de ID)
+        // As chaves são 'TARGETID_CATINDEX'
+        const keysToMigrate = Object.keys(gd.votes).filter(k => k.startsWith(oldId + '_'));
+        keysToMigrate.forEach(oldKey => {
+            const suffix = oldKey.substring(oldId.length); // pega _0, _1 etc
+            const newKey = newId + suffix;
+            gd.votes[newKey] = gd.votes[oldKey];
+            delete gd.votes[oldKey];
+            updated = true;
+        });
+    }
+
+    return updated;
+};
+
+// ... FUNÇÕES INTERNAS E HANDLERS (Mantenha o conteúdo original abaixo) ...
 const stopInitRound = (io, room, roomId, roundNum) => {
     const alphabet = "ABCDEFGHIJKLMNOPRSTUV"; 
     const letter = alphabet[Math.floor(Math.random() * alphabet.length)];
@@ -29,13 +79,10 @@ const stopInitRound = (io, room, roomId, roundNum) => {
 
 const startStopTimer = (io, room, roomId) => {
     if (room.stopTimer) clearTimeout(room.stopTimer);
-    
     room.stopTimer = setTimeout(() => {
         if (room.gameType === 'STOP' && room.gameData.phase === 'PLAYING') {
-            console.log(`[STOP] Timeout na sala ${roomId}`);
             room.gameData.stopCaller = 'TIMEOUT'; 
             io.to(roomId).emit('stop_triggered', { callerId: 'TIMEOUT', nickname: "TEMPO ESGOTADO" });
-            
             setTimeout(() => {
                 room.gameData.phase = 'REVIEW';
                 io.to(roomId).emit('update_game_data', { gameData: room.gameData, phase: 'REVIEW' });
@@ -58,17 +105,12 @@ const registerStopHandlers = (io, socket, rooms) => {
 
     socket.on('stop_call', ({ roomId, answers }) => {
         const room = rooms.get(roomId); if(!room || room.gameData.stopCaller) return; 
-        
         const filledCount = Object.values(answers || {}).filter(v => v && v.trim().length > 0).length;
         if (filledCount < 8) return; 
-
         room.gameData.answers[socket.id] = answers;
         room.gameData.stopCaller = socket.id;
-        
         if (room.stopTimer) clearTimeout(room.stopTimer);
-        
         io.to(roomId).emit('stop_triggered', { callerId: socket.id, nickname: room.players.find(p=>p.id===socket.id)?.nickname });
-        
         setTimeout(() => { 
             if(room.phase === 'GAME' && room.gameData.phase === 'PLAYING') { 
                 room.gameData.phase = 'REVIEW'; 
@@ -96,7 +138,6 @@ const registerStopHandlers = (io, socket, rooms) => {
 
     socket.on('stop_next_round', ({ roomId }) => {
         const room = rooms.get(roomId); if(!room || room.host !== socket.id) return;
-        
         // Calcular Pontos
         room.players.forEach(p => {
             let roundScore = 0;
@@ -105,13 +146,10 @@ const registerStopHandlers = (io, socket, rooms) => {
                 const rawWord = playerAns[idx] || "";
                 const normWord = normalize(rawWord);
                 if (!normWord) return;
-
                 const key = `${p.id}_${idx}`;
                 const votes = (room.gameData.votes && room.gameData.votes[key]) ? room.gameData.votes[key] : { invalid: [], duplicate: [] };
                 const threshold = room.players.length / 2;
-
                 if (votes.invalid.length > threshold) return; 
-
                 let isDuplicate = false;
                 if (votes.duplicate.length > threshold) {
                     isDuplicate = true;
@@ -142,4 +180,4 @@ const registerStopHandlers = (io, socket, rooms) => {
     });
 };
 
-module.exports = { startStop, registerStopHandlers };
+module.exports = { startStop, registerStopHandlers, handleStopRejoin };

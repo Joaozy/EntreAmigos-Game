@@ -3,13 +3,14 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 
-// Importação dos Módulos de Jogo
-const { startIto, registerItoHandlers } = require('./games/game_ito');
-const { startChaCafe, registerChaCafeHandlers } = require('./games/game_chacafe');
-const { startCodenames, registerCodenamesHandlers } = require('./games/game_codenames');
-const { startStop, registerStopHandlers } = require('./games/game_stop');
-// 1. IMPORTAR O TERMO
-const { startTermo, registerTermoHandlers } = require('./games/game_termo');
+// Importações dos Módulos
+const gameModules = {
+    'ITO': require('./games/game_ito'),
+    'CHA_CAFE': require('./games/game_chacafe'),
+    'CODENAMES': require('./games/game_codenames'),
+    'STOP': require('./games/game_stop'),
+    'TERMO': require('./games/game_termo')
+};
 
 const app = express();
 app.use(cors());
@@ -40,7 +41,7 @@ io.on('connection', (socket) => {
 
   socket.on('join_room', ({ roomId, nickname }) => joinRoomInternal(socket, roomId?.toUpperCase(), nickname, false));
 
-  // --- RECONEXÃO BLINDADA ---
+  // --- RECONEXÃO BLINDADA (REFATORADA) ---
   socket.on('rejoin_room', ({ roomId, nickname }) => {
     const room = rooms.get(roomId);
     if (!room) { socket.emit('error_msg', 'A sala expirou.'); return; }
@@ -48,31 +49,20 @@ io.on('connection', (socket) => {
     const existingIndex = room.players.findIndex(p => p.nickname === nickname);
     if (existingIndex !== -1) {
        const oldSocketId = room.players[existingIndex].id;
-       room.players[existingIndex].id = socket.id;
-       socket.join(roomId);
-       if (room.host === oldSocketId) { room.host = socket.id; room.players[existingIndex].isHost = true; }
+       const newSocketId = socket.id;
 
+       // 1. Atualizar Socket na Lista de Jogadores
+       room.players[existingIndex].id = newSocketId;
+       socket.join(roomId);
+       if (room.host === oldSocketId) { room.host = newSocketId; room.players[existingIndex].isHost = true; }
+
+       // 2. Delegar atualização de GameData para o Módulo
        let gameDataUpdated = false;
-       if (room.gameData) {
-           if (room.gameType === 'CHA_CAFE') {
-               if (room.gameData.narratorId === oldSocketId) { room.gameData.narratorId = socket.id; gameDataUpdated = true; }
-               if (room.gameData.lastGuesserId === oldSocketId) { room.gameData.lastGuesserId = socket.id; gameDataUpdated = true; }
-               if (room.gameData.guessersIds) {
-                   const gIdx = room.gameData.guessersIds.indexOf(oldSocketId);
-                   if (gIdx !== -1) { room.gameData.guessersIds[gIdx] = socket.id; gameDataUpdated = true; }
-               }
+       if (room.gameData && gameModules[room.gameType]) {
+           const module = gameModules[room.gameType];
+           if (module.handleRejoin) {
+               gameDataUpdated = module.handleRejoin(room, oldSocketId, newSocketId);
            }
-           if (room.gameType === 'CODENAMES' && room.gameData.teams) {
-               ['red', 'blue'].forEach(color => {
-                   if (room.gameData.teams[color].spymaster === oldSocketId) { room.gameData.teams[color].spymaster = socket.id; gameDataUpdated = true; }
-                   const mIdx = room.gameData.teams[color].members.indexOf(oldSocketId);
-                   if (mIdx !== -1) { room.gameData.teams[color].members[mIdx] = socket.id; gameDataUpdated = true; }
-               });
-           }
-           if (room.gameType === 'STOP') {
-               if (room.gameData.stopCaller === oldSocketId) { room.gameData.stopCaller = socket.id; gameDataUpdated = true; }
-           }
-           // Termo não guarda IDs no gameData, apenas chaves no objeto playersState, que já usamos o ID novo ao acessar.
        }
        
        socket.emit('joined_room', { 
@@ -87,34 +77,36 @@ io.on('connection', (socket) => {
     }
   });
 
-  // --- ROTEADOR DE INÍCIO ---
+  // --- ROTEADOR DE INÍCIO DINÂMICO ---
   socket.on('start_game', ({ roomId }) => {
     const room = rooms.get(roomId); if (!room || room.host !== socket.id) return;
+    const module = gameModules[room.gameType];
+    const starter = module ? (module[`start${toPascalCase(room.gameType)}`] || module.startIto || module.startStop || module.startTermo || module.startChaCafe || module.startCodenames) : null;
     
-    // 2. ADICIONAR ROTA DO TERMO
-    if (room.gameType === 'ITO') startIto(io, room, roomId);
-    else if (room.gameType === 'CHA_CAFE') startChaCafe(io, room, roomId);
-    else if (room.gameType === 'CODENAMES') startCodenames(io, room, roomId);
-    else if (room.gameType === 'STOP') startStop(io, room, roomId);
-    else if (room.gameType === 'TERMO') startTermo(io, room, roomId);
+    // Fallback manual se a convenção de nomes falhar, ou apenas chame explicitamente se preferir:
+    if (room.gameType === 'ITO') gameModules.ITO.startIto(io, room, roomId);
+    else if (room.gameType === 'CHA_CAFE') gameModules.CHA_CAFE.startChaCafe(io, room, roomId);
+    else if (room.gameType === 'CODENAMES') gameModules.CODENAMES.startCodenames(io, room, roomId);
+    else if (room.gameType === 'STOP') gameModules.STOP.startStop(io, room, roomId);
+    else if (room.gameType === 'TERMO') gameModules.TERMO.startTermo(io, room, roomId);
   });
 
   socket.on('restart_game', ({ roomId }) => {
       const room = rooms.get(roomId); if(room && room.host === socket.id) {
-          if(room.gameType === 'ITO') startIto(io, room, roomId);
-          if(room.gameType === 'CHA_CAFE') startChaCafe(io, room, roomId);
-          if(room.gameType === 'CODENAMES') startCodenames(io, room, roomId);
-          if(room.gameType === 'STOP') startStop(io, room, roomId);
-          if(room.gameType === 'TERMO') startTermo(io, room, roomId);
+        if (room.gameType === 'ITO') gameModules.ITO.startIto(io, room, roomId);
+        else if (room.gameType === 'CHA_CAFE') gameModules.CHA_CAFE.startChaCafe(io, room, roomId);
+        else if (room.gameType === 'CODENAMES') gameModules.CODENAMES.startCodenames(io, room, roomId);
+        else if (room.gameType === 'STOP') gameModules.STOP.startStop(io, room, roomId);
+        else if (room.gameType === 'TERMO') gameModules.TERMO.startTermo(io, room, roomId);
       }
   });
 
   // --- REGISTRO DOS HANDLERS ---
-  registerItoHandlers(io, socket, rooms);
-  registerChaCafeHandlers(io, socket, rooms);
-  registerCodenamesHandlers(io, socket, rooms);
-  registerStopHandlers(io, socket, rooms);
-  registerTermoHandlers(io, socket, rooms); // 3. REGISTRAR OUVINTES DO TERMO
+  Object.values(gameModules).forEach(mod => {
+      // Procura função que comece com "register"
+      const registerFn = Object.values(mod).find(fn => fn.name && fn.name.startsWith('register'));
+      if(registerFn) registerFn(io, socket, rooms);
+  });
 
   // --- UTILITÁRIOS GERAIS ---
   socket.on('send_message', (data) => io.to(data.roomId).emit('receive_message', data));
@@ -150,4 +142,11 @@ function joinRoomInternal(socket, roomId, nickname, isHost) {
   io.to(roomId).emit('update_players', room.players);
 }
 
-server.listen(3001, '0.0.0.0', () => console.log('SERVIDOR MODULAR ONLINE 3001'));
+// Auxiliar apenas se quiser automatizar o start_game no futuro
+function toPascalCase(str) { return str.replace(/(\w)(\w*)/g, (g0,g1,g2) => g1.toUpperCase() + g2.toLowerCase()).replace(/_/g, ''); }
+
+const PORT = process.env.PORT || 3001;
+
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`SERVIDOR ONLINE NA PORTA ${PORT}`);
+});

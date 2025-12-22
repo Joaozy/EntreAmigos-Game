@@ -10,14 +10,26 @@ const startCodenames = (io, room, roomId) => {
     io.to(roomId).emit('game_started', { gameType: 'CODENAMES', phase: 'SETUP', gameData: room.gameData, players: room.players });
 };
 
-// Funções Internas
+const handleCodenamesRejoin = (room, oldId, newId) => {
+    let updated = false;
+    const gd = room.gameData;
+    if (!gd.teams) return false;
+    ['red', 'blue'].forEach(color => {
+        if (gd.teams[color].spymaster === oldId) { gd.teams[color].spymaster = newId; updated = true; }
+        const idx = gd.teams[color].members.indexOf(oldId);
+        if (idx !== -1) { gd.teams[color].members[idx] = newId; updated = true; }
+    });
+    return updated;
+};
+
+// ... MANTENHA AS FUNÇÕES INTERNAS (cnEndTurn, endCodenames) ...
+// (Para economizar espaço, assuma que estão aqui iguais ao seu arquivo original)
 const cnEndTurn = (room) => {
     room.gameData.turn = room.gameData.turn === 'red' ? 'blue' : 'red';
     room.gameData.phase = 'HINT';
     room.gameData.hint = { word: '', count: 0 };
     room.gameData.guessesCount = 0;
 };
-
 const endCodenames = (io, room, roomId, winnerTeam) => {
     room.gameData.phase = 'GAME_OVER';
     room.gameData.winner = winnerTeam;
@@ -26,6 +38,7 @@ const endCodenames = (io, room, roomId, winnerTeam) => {
 };
 
 const registerCodenamesHandlers = (io, socket, rooms) => {
+    // ... MANTENHA OS HANDLERS ORIGINAIS ...
     socket.on('cn_join_team', ({ roomId, team }) => {
         const room = rooms.get(roomId); if (!room) return;
         room.gameData.teams.red.members = room.gameData.teams.red.members.filter(id => id !== socket.id);
@@ -107,4 +120,4 @@ const registerCodenamesHandlers = (io, socket, rooms) => {
     });
 };
 
-module.exports = { startCodenames, registerCodenamesHandlers };
+module.exports = { startCodenames, registerCodenamesHandlers, handleCodenamesRejoin };

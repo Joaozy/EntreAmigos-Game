@@ -16,6 +16,18 @@ const startChaCafe = (io, room, roomId) => {
     io.to(roomId).emit('game_started', { gameType: 'CHA_CAFE', phase: 'JUDGING', gameData: room.gameData, players: room.players });
 };
 
+const handleChaCafeRejoin = (room, oldId, newId) => {
+    let updated = false;
+    const gd = room.gameData;
+    if (gd.narratorId === oldId) { gd.narratorId = newId; updated = true; }
+    if (gd.lastGuesserId === oldId) { gd.lastGuesserId = newId; updated = true; }
+    if (gd.guessersIds) {
+        const idx = gd.guessersIds.indexOf(oldId);
+        if (idx !== -1) { gd.guessersIds[idx] = newId; updated = true; }
+    }
+    return updated;
+};
+
 const registerChaCafeHandlers = (io, socket, rooms) => {
     socket.on('cc_judge', ({ roomId, winnerWord }) => {
         const room = rooms.get(roomId); if (!room || room.gameData.narratorId !== socket.id) return;
@@ -44,4 +56,4 @@ const registerChaCafeHandlers = (io, socket, rooms) => {
     });
 };
 
-module.exports = { startChaCafe, registerChaCafeHandlers };
+module.exports = { startChaCafe, registerChaCafeHandlers, handleChaCafeRejoin };

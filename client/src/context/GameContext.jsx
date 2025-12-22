@@ -40,6 +40,15 @@ export const GameProvider = ({ children }) => {
         // 3. Configurar Listeners
         socket.on('connect', onConnect);
 
+        socket.on('connect_error', (err) => {
+            console.error("Erro de Conexão Socket:", err);
+            // Se estiver travado no Loading, libera o usuário
+            if (view === 'LOADING') {
+                alert("Não foi possível conectar ao servidor. Verifique se ele está online.");
+                sairDoJogo();
+            }
+        });
+
         socket.on('joined_room', (data) => {
             console.log("Entrou na sala:", data);
             setRoomId(data.roomId);
@@ -133,7 +142,7 @@ export const GameProvider = ({ children }) => {
             // Não desligamos outros listeners globais aqui para evitar problemas de montagem/desmontagem rápida,
             // mas em um app maior seria ideal limpar tudo.
         };
-    }, []); // Executa apenas uma vez no mount
+    }, [view]); // Executa apenas uma vez no mount
 
     const sairDoJogo = () => {
         localStorage.removeItem('saved_roomId');

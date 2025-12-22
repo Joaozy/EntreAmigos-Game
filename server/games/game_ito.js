@@ -14,6 +14,11 @@ const startIto = (io, room, roomId) => {
     room.players.forEach(p => io.to(p.id).emit('your_secret_number', p.secretNumber));
 };
 
+// ITO não armazena IDs no gameData, então não precisa de lógica complexa de rejoin
+const handleItoRejoin = (room, oldId, newId) => {
+    return false; // Retorna false indicando que o gameData não foi alterado
+};
+
 const registerItoHandlers = (io, socket, rooms) => {
     socket.on('submit_clue', ({ roomId, clue }) => {
         const room = rooms.get(roomId); if(!room) return;
@@ -52,4 +57,4 @@ const registerItoHandlers = (io, socket, rooms) => {
     });
 };
 
-module.exports = { startIto, registerItoHandlers };
+module.exports = { startIto, registerItoHandlers, handleItoRejoin };
