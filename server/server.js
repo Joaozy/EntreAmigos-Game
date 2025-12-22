@@ -19,9 +19,15 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: "*", methods: ["GET", "POST"] },
   pingTimeout: 60000, 
+  pingInterval: 25000 
 });
 
 const rooms = new Map();
+// Mapa para guardar os timers de destruição de sala (Grace Period)
+const roomDestructionTimers = new Map();
+
+// Tempo que a sala espera por reconexão antes de ser apagada (ex: 5 minutos)
+const ROOM_TIMEOUT_MS = 5 * 60 * 1000;
 
 io.on('connection', (socket) => {
   console.log(`[CONEXÃO] Nova: ${socket.id}`);
@@ -41,22 +47,36 @@ io.on('connection', (socket) => {
 
   socket.on('join_room', ({ roomId, nickname }) => joinRoomInternal(socket, roomId?.toUpperCase(), nickname, false));
 
-  // --- RECONEXÃO BLINDADA (REFATORADA) ---
+  // --- RECONEXÃO BLINDADA ---
   socket.on('rejoin_room', ({ roomId, nickname }) => {
     const room = rooms.get(roomId);
-    if (!room) { socket.emit('error_msg', 'A sala expirou.'); return; }
     
+    // Se a sala não existe, avisar o cliente para limpar o estado
+    if (!room) { 
+        socket.emit('error_msg', 'Sala expirou ou servidor reiniciou.'); 
+        return; 
+    }
+    
+    // Se a sala estava marcada para ser destruída (estava vazia), CANCELA a destruição
+    cancelRoomDestruction(roomId);
+
     const existingIndex = room.players.findIndex(p => p.nickname === nickname);
     if (existingIndex !== -1) {
        const oldSocketId = room.players[existingIndex].id;
        const newSocketId = socket.id;
 
-       // 1. Atualizar Socket na Lista de Jogadores
+       // 1. Atualizar Socket ID
        room.players[existingIndex].id = newSocketId;
+       room.players[existingIndex].connected = true; // Marca como online
        socket.join(roomId);
-       if (room.host === oldSocketId) { room.host = newSocketId; room.players[existingIndex].isHost = true; }
 
-       // 2. Delegar atualização de GameData para o Módulo
+       // Recupera Host se necessário
+       if (room.host === oldSocketId) { 
+           room.host = newSocketId; 
+           room.players[existingIndex].isHost = true; 
+       }
+
+       // 2. Atualizar GameData (Lógica Específica dos Jogos)
        let gameDataUpdated = false;
        if (room.gameData && gameModules[room.gameType]) {
            const module = gameModules[room.gameType];
@@ -72,18 +92,19 @@ io.on('connection', (socket) => {
        });
        io.to(roomId).emit('update_players', room.players);
        if(gameDataUpdated) io.to(roomId).emit('update_game_data', { gameData: room.gameData, phase: room.phase });
+       
+       console.log(`[REJOIN] ${nickname} voltou para a sala ${roomId}`);
     } else {
+       // Se não achou pelo nick, tenta entrar como novo
        joinRoomInternal(socket, roomId, nickname, false);
     }
   });
 
-  // --- ROTEADOR DE INÍCIO DINÂMICO ---
+  // --- ROTEADORES DE JOGO ---
   socket.on('start_game', ({ roomId }) => {
     const room = rooms.get(roomId); if (!room || room.host !== socket.id) return;
     const module = gameModules[room.gameType];
-    const starter = module ? (module[`start${toPascalCase(room.gameType)}`] || module.startIto || module.startStop || module.startTermo || module.startChaCafe || module.startCodenames) : null;
-    
-    // Fallback manual se a convenção de nomes falhar, ou apenas chame explicitamente se preferir:
+    // Tenta encontrar a função startXxx dinamicamente ou manualmente
     if (room.gameType === 'ITO') gameModules.ITO.startIto(io, room, roomId);
     else if (room.gameType === 'CHA_CAFE') gameModules.CHA_CAFE.startChaCafe(io, room, roomId);
     else if (room.gameType === 'CODENAMES') gameModules.CODENAMES.startCodenames(io, room, roomId);
@@ -101,15 +122,14 @@ io.on('connection', (socket) => {
       }
   });
 
-  // --- REGISTRO DOS HANDLERS ---
+  // Registra handlers de cada jogo
   Object.values(gameModules).forEach(mod => {
-      // Procura função que comece com "register"
       const registerFn = Object.values(mod).find(fn => fn.name && fn.name.startsWith('register'));
       if(registerFn) registerFn(io, socket, rooms);
   });
 
-  // --- UTILITÁRIOS GERAIS ---
   socket.on('send_message', (data) => io.to(data.roomId).emit('receive_message', data));
+  
   socket.on('kick_player', ({roomId, targetId}) => {
     const room = rooms.get(roomId); if (!room || room.host !== socket.id) return;
     room.players = room.players.filter(p => p.id !== targetId);
@@ -118,35 +138,82 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('update_players', room.players);
   });
 
+  // --- DISCONNECT INTELIGENTE ---
   socket.on('disconnect', () => {
      rooms.forEach((room, roomId) => {
-         const idx = room.players.findIndex(p => p.id === socket.id);
-         if(idx !== -1 && room.phase === 'LOBBY') {
-             room.players.splice(idx, 1);
-             if(room.players.length === 0) rooms.delete(roomId);
-             else {
-                 if(room.host === socket.id && room.players.length > 0) { room.host = room.players[0].id; room.players[0].isHost = true; }
-                 io.to(roomId).emit('update_players', room.players);
+         const player = room.players.find(p => p.id === socket.id);
+         
+         if (player) {
+             player.connected = false; // Marca como offline, mas NÃO remove ainda
+             
+             // Verifica quantos jogadores ainda estão conectados (socket.connected não funciona bem aqui, melhor usar flag)
+             // Vamos confiar na lista de sockets da sala do Socket.IO
+             const socketsInRoom = io.sockets.adapter.rooms.get(roomId);
+             const activeCount = socketsInRoom ? socketsInRoom.size : 0;
+
+             if (activeCount === 0) {
+                 // Se NINGUÉM sobrou na sala, agenda destruição
+                 console.log(`[SALA VAZIA] Sala ${roomId} agendada para exclusão em ${ROOM_TIMEOUT_MS/1000}s`);
+                 scheduleRoomDestruction(roomId);
+             } else {
+                 // Se ainda tem gente, só avisa que o jogador caiu (opcional: mudar cor no front)
+                 // Se estiver no LOBBY e cair, removemos? 
+                 // Melhor manter consistência: no lobby removemos rápido, no jogo mantemos.
+                 if (room.phase === 'LOBBY') {
+                     // No lobby, removemos imediatamente para não "trancar" slots
+                     room.players = room.players.filter(p => p.id !== socket.id);
+                     io.to(roomId).emit('update_players', room.players);
+                     if(room.players.length === 0) scheduleRoomDestruction(roomId);
+                 }
              }
          }
      });
   });
 });
 
+// Funções Auxiliares de Gerenciamento de Sala
+
+function cancelRoomDestruction(roomId) {
+    if (roomDestructionTimers.has(roomId)) {
+        console.log(`[RESGATADA] Sala ${roomId} teve a exclusão cancelada.`);
+        clearTimeout(roomDestructionTimers.get(roomId));
+        roomDestructionTimers.delete(roomId);
+    }
+}
+
+function scheduleRoomDestruction(roomId) {
+    // Se já tiver timer, não cria outro
+    if (roomDestructionTimers.has(roomId)) return;
+
+    const timer = setTimeout(() => {
+        if (rooms.has(roomId)) {
+            console.log(`[DESTRUINDO] Sala ${roomId} expirou por inatividade.`);
+            rooms.delete(roomId);
+            roomDestructionTimers.delete(roomId);
+        }
+    }, ROOM_TIMEOUT_MS);
+    
+    roomDestructionTimers.set(roomId, timer);
+}
+
 function joinRoomInternal(socket, roomId, nickname, isHost) {
-  if (!roomId) return; const room = rooms.get(roomId.toUpperCase()); if (!room) { socket.emit('error_msg', 'Sala não encontrada'); return; }
-  const isDuplicate = room.players.some(p => p.id === socket.id || (p.nickname === nickname && p.id !== socket.id)); if (isDuplicate) return;
-  const newPlayer = { id: socket.id, nickname, isHost, secretNumber: null, clue: '', hasSubmitted: false };
-  room.players.push(newPlayer); socket.join(roomId);
+  if (!roomId) return; 
+  const room = rooms.get(roomId.toUpperCase()); 
+  if (!room) { socket.emit('error_msg', 'Sala não encontrada'); return; }
+  
+  cancelRoomDestruction(roomId.toUpperCase()); // Garante que a sala não suma ao entrar
+
+  const isDuplicate = room.players.some(p => p.id === socket.id || (p.nickname === nickname && p.id !== socket.id)); 
+  if (isDuplicate) return; // Talvez emitir um rejoin aqui?
+
+  const newPlayer = { id: socket.id, nickname, isHost, connected: true, secretNumber: null, clue: '', hasSubmitted: false };
+  room.players.push(newPlayer); 
+  socket.join(roomId);
+  
   socket.emit('joined_room', { roomId, isHost, players: room.players, gameType: room.gameType, phase: room.phase, gameData: room.gameData });
   io.to(roomId).emit('update_players', room.players);
 }
 
-// Auxiliar apenas se quiser automatizar o start_game no futuro
-function toPascalCase(str) { return str.replace(/(\w)(\w*)/g, (g0,g1,g2) => g1.toUpperCase() + g2.toLowerCase()).replace(/_/g, ''); }
-
+// Configuração de Porta para Deploy
 const PORT = process.env.PORT || 3001;
-
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`SERVIDOR ONLINE NA PORTA ${PORT}`);
-});
+server.listen(PORT, '0.0.0.0', () => console.log(`SERVIDOR ONLINE NA PORTA ${PORT}`));

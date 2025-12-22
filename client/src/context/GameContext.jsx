@@ -6,50 +6,60 @@ const GameContext = createContext();
 export const useGame = () => useContext(GameContext);
 
 export const GameProvider = ({ children }) => {
-    // Estados de Navegação e Usuário
-    const [view, setView] = useState('HOME'); // HOME, LOGIN, LOBBY, GAME, LOADING
+    // Estados
+    const [view, setView] = useState('HOME'); 
+    const [isConnected, setIsConnected] = useState(socket.connected);
     const [roomId, setRoomId] = useState('');
     const [nickname, setNickname] = useState('');
     const [isHost, setIsHost] = useState(false);
     const [isJoining, setIsJoining] = useState(false);
     
-    // Estados do Jogo (Dados)
+    // Dados do Jogo
     const [players, setPlayers] = useState([]);
-    const [selectedGame, setSelectedGame] = useState('ITO'); // Jogo escolhido na Home
-    const [gameType, setGameType] = useState(null);          // Jogo ativo na sala
+    const [selectedGame, setSelectedGame] = useState('ITO');
+    const [gameType, setGameType] = useState(null);
     const [gameData, setGameData] = useState({});
     const [currentPhase, setCurrentPhase] = useState('LOBBY');
     const [mySecret, setMySecret] = useState(null);
     const [gameResult, setGameResult] = useState(null);
 
     useEffect(() => {
-        // 1. Ler dados salvos ao montar o componente
+        // Recuperação de sessão
         const savedRoom = localStorage.getItem('saved_roomId');
         const savedNick = localStorage.getItem('saved_nickname');
 
-        // 2. Definir o que fazer quando conectar
         const onConnect = () => {
             console.log("Socket conectado!", socket.id);
-            // Tenta reconectar automaticamente se houver dados salvos
+            setIsConnected(true);
             if (savedRoom && savedNick) {
-                console.log("Tentando rejoin automático para:", savedRoom);
+                console.log("Tentando rejoin automático...", savedRoom);
                 socket.emit('rejoin_room', { roomId: savedRoom, nickname: savedNick });
             }
         };
 
-        // 3. Listeners do Socket
-        socket.on('connect', onConnect);
-        
-        socket.on('connect_error', (err) => {
-            console.error("Erro de conexão:", err);
-            if (view === 'LOADING' || isJoining) {
-                alert("Erro ao conectar com o servidor. Tente novamente.");
-                sairDoJogo();
-            }
-        });
+        const onDisconnect = () => {
+            console.log("Socket desconectado.");
+            setIsConnected(false);
+        };
 
+        const onErrorMsg = (msg) => {
+            console.warn("Erro do servidor:", msg);
+            // CRÍTICO: Se a sala expirou, limpa tudo para evitar loop
+            if (msg.includes("expirou") || msg.includes("Sala não encontrada")) {
+                alert("Sua sessão expirou. Você será redirecionado para o início.");
+                limparSessaoLocal();
+                setView('HOME');
+            } else {
+                alert(msg);
+            }
+            setIsJoining(false);
+        };
+
+        socket.on('connect', onConnect);
+        socket.on('disconnect', onDisconnect);
+        socket.on('error_msg', onErrorMsg);
+        
         socket.on('joined_room', (data) => {
-            console.log("Entrou na sala:", data);
             setRoomId(data.roomId);
             setIsHost(data.isHost);
             setPlayers(data.players);
@@ -57,9 +67,8 @@ export const GameProvider = ({ children }) => {
             if(data.gameData) setGameData(data.gameData);
             if(data.mySecretNumber) setMySecret(data.mySecretNumber);
             
-            // Salva sessão atual
+            // Atualiza sessão
             localStorage.setItem('saved_roomId', data.roomId);
-            // Garante que salvamos o nick, caso tenha entrado por link ou código direto
             const myNick = data.players.find(p => p.id === socket.id)?.nickname || savedNick || nickname;
             localStorage.setItem('saved_nickname', myNick);
             if(myNick) setNickname(myNick);
@@ -73,13 +82,9 @@ export const GameProvider = ({ children }) => {
             setIsJoining(false);
         });
 
-        socket.on('room_created', (id) => {
-             setRoomId(id);
-             // O evento joined_room vem logo em seguida
-        });
-        
+        // Listeners gerais do jogo (mantidos iguais)
+        socket.on('room_created', (id) => setRoomId(id));
         socket.on('update_players', setPlayers);
-        
         socket.on('game_started', (data) => {
             setPlayers(data.players);
             setGameType(data.gameType);
@@ -88,89 +93,51 @@ export const GameProvider = ({ children }) => {
             setGameResult(null);
             setView('GAME');
         });
-
-        socket.on('update_game_data', ({ gameData, phase }) => {
-            setGameData(gameData);
-            setCurrentPhase(phase);
-        });
-
+        socket.on('update_game_data', ({ gameData, phase }) => { setGameData(gameData); setCurrentPhase(phase); });
         socket.on('game_over', (data) => {
-            // Lógica unificada de fim de jogo
              if(data.winnerWord || data.winner || data.secretWord) { 
                 setCurrentPhase(data.phase || 'VICTORY'); 
                 setGameData(prev => ({ ...prev, ...(data.gameData || {}), winner: data.winner, secretWord: data.secretWord, targetWord: data.targetWord }));
             } else if (data.results) { 
-                setGameResult(data);
-                setPlayers(data.results); 
-                setCurrentPhase('REVEAL'); 
+                setGameResult(data); setPlayers(data.results); setCurrentPhase('REVEAL'); 
             }
         });
-
         socket.on('your_secret_number', setMySecret);
-        
-        socket.on('phase_change', (data) => { 
-            setCurrentPhase(data.phase); 
-            if(data.players) setPlayers(data.players); 
-        });
-        
-        socket.on('player_submitted', ({ playerId }) => {
-            setPlayers(prev => prev.map(p => p.id === playerId ? {...p, hasSubmitted: true} : p));
-        });
-        
+        socket.on('phase_change', (data) => { setCurrentPhase(data.phase); if(data.players) setPlayers(data.players); });
+        socket.on('player_submitted', ({ playerId }) => { setPlayers(prev => prev.map(p => p.id === playerId ? {...p, hasSubmitted: true} : p)); });
         socket.on('order_updated', setPlayers);
+        socket.on('kicked', () => { alert("Você foi expulso."); sairDoJogo(); });
 
-        socket.on('kicked', () => { 
-            alert("Você foi expulso da sala."); 
-            sairDoJogo(); 
-        });
-        
-        socket.on('error_msg', (msg) => { 
-            console.warn("Erro recebido do server:", msg);
-            if (view === 'LOADING') {
-                alert("Não foi possível voltar à sala: " + msg);
-                sairDoJogo(); 
-            } else {
-                alert(msg);
-            }
-            setIsJoining(false);
-        });
-
-        // 4. Lógica de Inicialização (Auto-Rejoin)
+        // Inicialização
         if (savedRoom && savedNick) {
-            console.log("Restaurando sessão...");
             setView('LOADING');
             setRoomId(savedRoom);
             setNickname(savedNick);
-            
-            if (!socket.connected) {
-                socket.connect();
-            } else {
-                // Se já estiver conectado (ex: hot reload), emite direto
-                socket.emit('rejoin_room', { roomId: savedRoom, nickname: savedNick });
-            }
+            if (!socket.connected) socket.connect();
+            else socket.emit('rejoin_room', { roomId: savedRoom, nickname: savedNick });
         }
 
         return () => { 
             socket.off('connect', onConnect);
-            socket.off('connect_error');
-            // Nota: Em um app maior, removeríamos todos os listeners aqui
+            socket.off('disconnect', onDisconnect);
+            socket.off('error_msg', onErrorMsg);
         };
-    }, []); // Array vazio = roda apenas uma vez no mount
+    }, []);
 
-    // --- AÇÕES DO USUÁRIO ---
-
-    const sairDoJogo = () => {
+    const limparSessaoLocal = () => {
         localStorage.removeItem('saved_roomId');
         localStorage.removeItem('saved_nickname');
-        
         setRoomId(''); 
         setPlayers([]); 
         setIsHost(false); 
-        setView('HOME'); 
-        setIsJoining(false);
         setGameData({}); 
         setGameType(null);
-        
+        setIsJoining(false);
+    };
+
+    const sairDoJogo = () => {
+        limparSessaoLocal();
+        setView('HOME'); 
         socket.disconnect();
     };
 
@@ -178,59 +145,33 @@ export const GameProvider = ({ children }) => {
         if(!nickname) return;
         setIsJoining(true);
         localStorage.setItem('saved_nickname', nickname);
-
-        const enviar = () => {
-            console.log("Enviando create_room...");
-            socket.emit('create_room', { nickname, gameType: selectedGame });
-        };
-
-        if (!socket.connected) {
-            console.log("Conectando socket antes de criar...");
-            socket.connect();
-            socket.once('connect', enviar);
-        } else {
-            enviar();
-        }
+        const enviar = () => socket.emit('create_room', { nickname, gameType: selectedGame });
+        if (!socket.connected) { socket.connect(); socket.once('connect', enviar); } else enviar();
     };
 
     const entrarSala = () => {
         if(!nickname || !roomId) return;
         setIsJoining(true);
         localStorage.setItem('saved_nickname', nickname);
-
-        const enviar = () => {
-            console.log("Enviando join_room para:", roomId);
-            socket.emit('join_room', { roomId, nickname });
-        };
-
-        if (!socket.connected) {
-            console.log("Conectando socket antes de entrar...");
-            socket.connect();
-            socket.once('connect', enviar);
-        } else {
-            enviar();
-        }
+        const enviar = () => socket.emit('join_room', { roomId, nickname });
+        if (!socket.connected) { socket.connect(); socket.once('connect', enviar); } else enviar();
     };
 
     return (
         <GameContext.Provider value={{
-            // Estados
-            view, setView,
-            players, isHost,
-            roomId, setRoomId,
-            nickname, setNickname,
-            selectedGame, setSelectedGame,
-            gameType, gameData,
-            currentPhase, mySecret,
-            gameResult, isJoining,
-            socket,
-            
-            // Ações
-            criarSala,
-            entrarSala,
-            sairDoJogo
+            view, setView, isConnected,
+            players, isHost, roomId, setRoomId, nickname, setNickname,
+            selectedGame, setSelectedGame, gameType, gameData, currentPhase, mySecret,
+            gameResult, isJoining, socket,
+            criarSala, entrarSala, sairDoJogo
         }}>
             {children}
+            {/* Banner de Reconexão Global */}
+            {!isConnected && view !== 'HOME' && view !== 'LOGIN' && (
+                <div className="fixed top-0 left-0 w-full bg-red-600 text-white text-xs font-bold text-center py-1 z-[9999] animate-pulse">
+                    Conexão perdida. Tentando reconectar...
+                </div>
+            )}
         </GameContext.Provider>
     );
 };
