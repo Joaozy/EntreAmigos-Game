@@ -9,32 +9,31 @@ const startSpy = (io, room, roomId) => {
     const spyPlayer = room.players[Math.floor(Math.random() * room.players.length)];
     
     // 3. Define Ordem de Turnos (Shuffle inicial)
-    // Criamos uma cópia dos IDs para gerenciar a rotação
     const turnOrder = room.players.map(p => p.id).sort(() => Math.random() - 0.5);
 
     // 4. Configura Estado do Jogo
-    const duration = 10 * 60 * 1000; // 10 minutos totais (segurança)
+    const duration = 10 * 60 * 1000; // 10 minutos
     
     room.gameData = {
         category: themeObj.category,
-        secretWord: secretWord, // Guardado no servidor, enviado só pra civis
+        secretWord: secretWord, 
         questions: themeObj.questions,
         spyId: spyPlayer.id,
         
-        // Estado da Rodada de Perguntas
-        currentQuestionIndex: 0, // 0, 1 ou 2
-        turnOrder: turnOrder,    // Lista de IDs na ordem atual
-        currentTurnIndex: 0,     // Índice do jogador que deve responder agora
-        answers: [],             // Histórico de respostas: { playerId, nickname, text, questionIdx }
+        // Estado das Perguntas
+        currentQuestionIndex: 0,
+        turnOrder: turnOrder,
+        currentTurnIndex: 0,
+        answers: [],
         
         endTime: Date.now() + duration,
-        phase: 'QUESTIONS', // QUESTIONS -> DISCUSSION -> REVEAL
+        phase: 'QUESTIONS',
         isRevealed: false
     };
     
     room.phase = 'GAME';
 
-    // 5. Envia dados para todos (Dados Públicos)
+    // 5. Envia dados PÚBLICOS
     io.to(roomId).emit('game_started', { 
         gameType: 'SPY', 
         phase: 'GAME', 
@@ -42,7 +41,7 @@ const startSpy = (io, room, roomId) => {
         players: room.players 
     });
 
-    // 6. Envia segredos individuais
+    // 6. Envia segredos INDIVIDUAIS
     room.players.forEach(p => {
         const isSpy = p.id === spyPlayer.id;
         io.to(p.id).emit('spy_secret', { 
@@ -59,12 +58,12 @@ const getPublicGameData = (room) => {
         category: gd.category,
         questions: gd.questions,
         currentQuestionIndex: gd.currentQuestionIndex,
-        currentTurnId: gd.turnOrder[gd.currentTurnIndex], // ID de quem responde agora
+        currentTurnId: gd.turnOrder[gd.currentTurnIndex], 
         answers: gd.answers,
         endTime: gd.endTime,
         phase: gd.phase,
         isRevealed: gd.isRevealed,
-        // Se já revelou, manda tudo, senão esconde
+        // Só envia segredos se o jogo acabou
         secretWord: gd.isRevealed ? gd.secretWord : null,
         spyId: gd.isRevealed ? gd.spyId : null
     };
@@ -76,7 +75,6 @@ const handleSpyRejoin = (room, oldId, newId) => {
     
     if (gd.spyId === oldId) { gd.spyId = newId; updated = true; }
     
-    // Atualiza na ordem de turnos
     const turnIdx = gd.turnOrder.indexOf(oldId);
     if (turnIdx !== -1) { gd.turnOrder[turnIdx] = newId; updated = true; }
 
@@ -89,7 +87,7 @@ const registerSpyHandlers = (io, socket, rooms) => {
         if (!room || room.gameType !== 'SPY') return;
         const gd = room.gameData;
 
-        // Verifica se é a vez do jogador
+        // Verifica vez
         const expectedId = gd.turnOrder[gd.currentTurnIndex];
         if (socket.id !== expectedId) return;
 
@@ -105,20 +103,17 @@ const registerSpyHandlers = (io, socket, rooms) => {
         // Avança turno
         gd.currentTurnIndex++;
 
-        // Verifica se todos responderam a pergunta atual
+        // Se todos responderam
         if (gd.currentTurnIndex >= gd.turnOrder.length) {
-            // Fim da Pergunta Atual
             if (gd.currentQuestionIndex < 2) {
-                // Vai para a próxima pergunta
+                // Próxima pergunta
                 gd.currentQuestionIndex++;
-                
-                // ROTACIONA A ORDEM (Jogador 2 vira o primeiro, etc)
+                // Rotaciona quem começa (o primeiro vai pro fim)
                 const first = gd.turnOrder.shift();
                 gd.turnOrder.push(first);
-                
-                gd.currentTurnIndex = 0; // Reseta para o novo primeiro
+                gd.currentTurnIndex = 0; 
             } else {
-                // Acabaram as perguntas -> Fase de Discussão Livre
+                // Acabou as perguntas
                 gd.phase = 'DISCUSSION';
             }
         }
@@ -134,7 +129,7 @@ const registerSpyHandlers = (io, socket, rooms) => {
         if (!room || room.host !== socket.id) return;
 
         room.gameData.isRevealed = true;
-        room.gameData.phase = 'REVEAL'; // Atualiza fase interna
+        room.gameData.phase = 'REVEAL';
         
         io.to(roomId).emit('game_over', { 
             gameData: getPublicGameData(room),
