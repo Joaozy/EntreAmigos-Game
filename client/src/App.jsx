@@ -11,8 +11,8 @@ import GameSpy from './GameSpy'; // <--- IMPORTANTE: O novo jogo
 
 import Chat from './Chat';
 
-// Ícones (Adicionamos UserSecret, Users, User, Users2 para as categorias e o espião)
-import { Trash2, ArrowRight, Gamepad2, Info, Coffee, Loader2, LogOut, Eye, Hand, LayoutGrid, UserSecret, User, Users, Users2 } from 'lucide-react';
+// Ícones
+import { Trash2, Gamepad2, Coffee, Loader2, LogOut, Eye, Hand, LayoutGrid, UserSecret, User, Users, Users2 } from 'lucide-react';
 
 // --- CONFIGURAÇÃO DOS JOGOS ---
 const GAMES_CONFIG = [
@@ -82,7 +82,6 @@ export default function App() {
   let savedRoom = localStorage.getItem('saved_roomId');
   let savedNick = localStorage.getItem('saved_nickname');
 
-  // Limpeza de estado inválido
   if (savedRoom && !savedNick) {
       localStorage.removeItem('saved_roomId');
       savedRoom = null;
@@ -105,7 +104,6 @@ export default function App() {
   const [isJoining, setIsJoining] = useState(false);
 
   useEffect(() => {
-    // --- LÓGICA DE CONEXÃO E REJOIN ---
     const tentarReconectar = () => {
         const sRoom = localStorage.getItem('saved_roomId');
         const sNick = localStorage.getItem('saved_nickname');
@@ -120,7 +118,6 @@ export default function App() {
     const onConnect = () => tentarReconectar();
     socket.on('connect', onConnect);
     
-    // --- EVENTOS DO JOGO ---
     socket.on('joined_room', (data) => { 
       handleJoinSuccess(data.roomId, data.isHost);
       setPlayers(data.players); 
@@ -153,10 +150,6 @@ export default function App() {
         setCurrentPhase(phase);
     });
 
-    socket.on('spy_secret', (data) => { 
-        // O GameSpy ouve isso internamente, mas podemos guardar aqui se precisarmos
-    });
-
     socket.on('your_secret_number', (n) => setMySecret(n));
     socket.on('phase_change', (data) => { setCurrentPhase(data.phase); setPlayers(data.players); });
     socket.on('player_submitted', ({ playerId }) => {
@@ -179,7 +172,6 @@ export default function App() {
           setPlayers(data.results); 
           setCurrentPhase('REVEAL'); 
       } else if (data.gameData && data.phase === 'REVEAL') {
-          // Caso específico do Spy
           setGameData(data.gameData);
           setCurrentPhase('REVEAL');
       }
@@ -202,8 +194,6 @@ export default function App() {
   const iniciar = () => socket.emit('start_game', { roomId });
   const expulsar = (targetId) => { if(confirm("Expulsar este jogador?")) socket.emit('kick_player', { roomId, targetId }); }
 
-  // --- REGRAS DINÂMICAS DE START ---
-  // Pega a config do jogo selecionado/ativo
   const selectedGameObj = GAMES_CONFIG.find(g => g.id === selectedGame) || GAMES_CONFIG[0];
   const activeGameId = gameType || 'ITO'; 
   const activeGameObj = GAMES_CONFIG.find(g => g.id === activeGameId) || GAMES_CONFIG[0];
@@ -212,7 +202,6 @@ export default function App() {
 
   if (view === 'LOADING') return (<div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white p-4 text-center"><Loader2 className="w-16 h-16 animate-spin text-indigo-500 mb-4" /><h2 className="text-xl font-bold">Reconectando...</h2><button onClick={sairDoJogo} className="mt-8 text-red-400 text-sm border border-red-900/50 p-2 rounded bg-red-900/20">Cancelar</button></div>);
 
-  // --- NOVA HOME PAGE COM CATEGORIAS ---
   if (view === 'HOME') {
     const categories = ['SOLO / VERSUS (1+)', 'PEQUENOS GRUPOS (2+)', 'GALERA E TIMES (4+)'];
     
@@ -265,17 +254,15 @@ export default function App() {
     );
   }
 
-  // --- TELA DE LOGIN DINÂMICA ---
   if (view === 'LOGIN') {
       const theme = GAMES_CONFIG.find(g => g.id === selectedGame) || GAMES_CONFIG[0];
-      // Mapeamento manual de cores para garantir que o Tailwind inclua no bundle
       let btnClass = "bg-slate-600";
       if(theme.color === 'indigo') btnClass = "bg-indigo-600 hover:bg-indigo-700";
       if(theme.color === 'pink') btnClass = "bg-pink-600 hover:bg-pink-700";
       if(theme.color === 'teal') btnClass = "bg-teal-600 hover:bg-teal-700";
       if(theme.color === 'purple') btnClass = "bg-purple-600 hover:bg-purple-700";
       if(theme.color === 'emerald') btnClass = "bg-emerald-600 hover:bg-emerald-700";
-      if(theme.color === 'red') btnClass = "bg-red-600 hover:bg-red-700"; // Para o Espião
+      if(theme.color === 'red') btnClass = "bg-red-600 hover:bg-red-700";
 
       return (
         <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
@@ -296,7 +283,6 @@ export default function App() {
       );
   }
 
-  // --- LOBBY DINÂMICO ---
   if (view === 'LOBBY') return (
     <div className="min-h-screen bg-slate-900 flex flex-col items-center pt-10 p-4">
       <div className="w-full max-w-md bg-white p-8 rounded-3xl shadow-2xl text-center relative animate-in zoom-in-95">
