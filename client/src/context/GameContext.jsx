@@ -6,45 +6,44 @@ const GameContext = createContext();
 export const useGame = () => useContext(GameContext);
 
 export const GameProvider = ({ children }) => {
-    const [view, setView] = useState('HOME'); // HOME, LOGIN, LOBBY, GAME
-    const [players, setPlayers] = useState([]);
-    const [isHost, setIsHost] = useState(false);
+    // Estados de Navegação e Usuário
+    const [view, setView] = useState('HOME'); // HOME, LOGIN, LOBBY, GAME, LOADING
     const [roomId, setRoomId] = useState('');
     const [nickname, setNickname] = useState('');
+    const [isHost, setIsHost] = useState(false);
+    const [isJoining, setIsJoining] = useState(false);
     
-    // Estados do Jogo
-    const [selectedGame, setSelectedGame] = useState('ITO');
-    const [gameType, setGameType] = useState(null);
+    // Estados do Jogo (Dados)
+    const [players, setPlayers] = useState([]);
+    const [selectedGame, setSelectedGame] = useState('ITO'); // Jogo escolhido na Home
+    const [gameType, setGameType] = useState(null);          // Jogo ativo na sala
     const [gameData, setGameData] = useState({});
     const [currentPhase, setCurrentPhase] = useState('LOBBY');
     const [mySecret, setMySecret] = useState(null);
     const [gameResult, setGameResult] = useState(null);
-    const [isJoining, setIsJoining] = useState(false);
 
     useEffect(() => {
-        // 1. Ler do LocalStorage
+        // 1. Ler dados salvos ao montar o componente
         const savedRoom = localStorage.getItem('saved_roomId');
         const savedNick = localStorage.getItem('saved_nickname');
 
-        // 2. Definir função de conexão ANTES de conectar
+        // 2. Definir o que fazer quando conectar
         const onConnect = () => {
             console.log("Socket conectado!", socket.id);
-            // CORREÇÃO CRÍTICA: Usamos as variáveis locais 'savedRoom' e 'savedNick'
-            // em vez do estado 'roomId'/'nickname' que pode estar vazio no closure.
+            // Tenta reconectar automaticamente se houver dados salvos
             if (savedRoom && savedNick) {
                 console.log("Tentando rejoin automático para:", savedRoom);
                 socket.emit('rejoin_room', { roomId: savedRoom, nickname: savedNick });
             }
         };
 
-        // 3. Configurar Listeners
+        // 3. Listeners do Socket
         socket.on('connect', onConnect);
-
+        
         socket.on('connect_error', (err) => {
-            console.error("Erro de Conexão Socket:", err);
-            // Se estiver travado no Loading, libera o usuário
-            if (view === 'LOADING') {
-                alert("Não foi possível conectar ao servidor. Verifique se ele está online.");
+            console.error("Erro de conexão:", err);
+            if (view === 'LOADING' || isJoining) {
+                alert("Erro ao conectar com o servidor. Tente novamente.");
                 sairDoJogo();
             }
         });
@@ -58,10 +57,13 @@ export const GameProvider = ({ children }) => {
             if(data.gameData) setGameData(data.gameData);
             if(data.mySecretNumber) setMySecret(data.mySecretNumber);
             
-            // Salva novamente para garantir
+            // Salva sessão atual
             localStorage.setItem('saved_roomId', data.roomId);
-            localStorage.setItem('saved_nickname', data.players.find(p => p.id === socket.id)?.nickname || savedNick || nickname);
-            
+            // Garante que salvamos o nick, caso tenha entrado por link ou código direto
+            const myNick = data.players.find(p => p.id === socket.id)?.nickname || savedNick || nickname;
+            localStorage.setItem('saved_nickname', myNick);
+            if(myNick) setNickname(myNick);
+
             if (data.phase !== 'LOBBY') {
                 setCurrentPhase(data.phase);
                 setView('GAME');
@@ -73,6 +75,7 @@ export const GameProvider = ({ children }) => {
 
         socket.on('room_created', (id) => {
              setRoomId(id);
+             // O evento joined_room vem logo em seguida
         });
         
         socket.on('update_players', setPlayers);
@@ -92,9 +95,10 @@ export const GameProvider = ({ children }) => {
         });
 
         socket.on('game_over', (data) => {
+            // Lógica unificada de fim de jogo
              if(data.winnerWord || data.winner || data.secretWord) { 
                 setCurrentPhase(data.phase || 'VICTORY'); 
-                setGameData(prev => ({ ...prev, ...(data.gameData || {}), winner: data.winner }));
+                setGameData(prev => ({ ...prev, ...(data.gameData || {}), winner: data.winner, secretWord: data.secretWord, targetWord: data.targetWord }));
             } else if (data.results) { 
                 setGameResult(data);
                 setPlayers(data.results); 
@@ -103,17 +107,27 @@ export const GameProvider = ({ children }) => {
         });
 
         socket.on('your_secret_number', setMySecret);
-        socket.on('phase_change', (data) => { setCurrentPhase(data.phase); if(data.players) setPlayers(data.players); });
+        
+        socket.on('phase_change', (data) => { 
+            setCurrentPhase(data.phase); 
+            if(data.players) setPlayers(data.players); 
+        });
+        
         socket.on('player_submitted', ({ playerId }) => {
             setPlayers(prev => prev.map(p => p.id === playerId ? {...p, hasSubmitted: true} : p));
         });
+        
         socket.on('order_updated', setPlayers);
 
-        socket.on('kicked', () => { alert("Você foi expulso."); sairDoJogo(); });
+        socket.on('kicked', () => { 
+            alert("Você foi expulso da sala."); 
+            sairDoJogo(); 
+        });
+        
         socket.on('error_msg', (msg) => { 
-            console.warn("Erro recebido:", msg);
+            console.warn("Erro recebido do server:", msg);
             if (view === 'LOADING') {
-                alert("Erro ao reconectar: " + msg);
+                alert("Não foi possível voltar à sala: " + msg);
                 sairDoJogo(); 
             } else {
                 alert(msg);
@@ -121,34 +135,42 @@ export const GameProvider = ({ children }) => {
             setIsJoining(false);
         });
 
-        // 4. Lógica de Inicialização (Rejoin ou Home)
+        // 4. Lógica de Inicialização (Auto-Rejoin)
         if (savedRoom && savedNick) {
-            console.log("Dados salvos encontrados. Iniciando modo LOADING...");
+            console.log("Restaurando sessão...");
             setView('LOADING');
             setRoomId(savedRoom);
             setNickname(savedNick);
             
             if (!socket.connected) {
-                console.log("Socket desconectado. Iniciando conexão...");
                 socket.connect();
             } else {
-                console.log("Socket já conectado. Emitindo rejoin direto.");
+                // Se já estiver conectado (ex: hot reload), emite direto
                 socket.emit('rejoin_room', { roomId: savedRoom, nickname: savedNick });
             }
         }
 
         return () => { 
             socket.off('connect', onConnect);
-            // Não desligamos outros listeners globais aqui para evitar problemas de montagem/desmontagem rápida,
-            // mas em um app maior seria ideal limpar tudo.
+            socket.off('connect_error');
+            // Nota: Em um app maior, removeríamos todos os listeners aqui
         };
-    }, [view]); // Executa apenas uma vez no mount
+    }, []); // Array vazio = roda apenas uma vez no mount
+
+    // --- AÇÕES DO USUÁRIO ---
 
     const sairDoJogo = () => {
         localStorage.removeItem('saved_roomId');
         localStorage.removeItem('saved_nickname');
-        setRoomId(''); setPlayers([]); setIsHost(false); setView('HOME'); setIsJoining(false);
-        setGameData({}); setGameType(null);
+        
+        setRoomId(''); 
+        setPlayers([]); 
+        setIsHost(false); 
+        setView('HOME'); 
+        setIsJoining(false);
+        setGameData({}); 
+        setGameType(null);
+        
         socket.disconnect();
     };
 
@@ -156,39 +178,57 @@ export const GameProvider = ({ children }) => {
         if(!nickname) return;
         setIsJoining(true);
         localStorage.setItem('saved_nickname', nickname);
-        if (!socket.connected) socket.connect();
-        // Pequeno delay para garantir que 'connect' disparou se estava desconectado
-        setTimeout(() => {
-            if (socket.connected) socket.emit('create_room', { nickname, gameType: selectedGame });
-        }, 100);
+
+        const enviar = () => {
+            console.log("Enviando create_room...");
+            socket.emit('create_room', { nickname, gameType: selectedGame });
+        };
+
+        if (!socket.connected) {
+            console.log("Conectando socket antes de criar...");
+            socket.connect();
+            socket.once('connect', enviar);
+        } else {
+            enviar();
+        }
     };
 
     const entrarSala = () => {
         if(!nickname || !roomId) return;
         setIsJoining(true);
         localStorage.setItem('saved_nickname', nickname);
-        if (!socket.connected) socket.connect();
-        
-        // Se já estiver conectado, envia. Se não, o listener 'connect' (definido no useEffect)
-        // NÃO vai pegar este caso específico de login manual, então precisamos garantir o envio aqui
-        // ou adicionar um listener temporário. Como o socket.js tem autoConnect:false,
-        // o fluxo mais seguro é:
-        if (socket.connected) {
-             socket.emit('join_room', { roomId, nickname });
+
+        const enviar = () => {
+            console.log("Enviando join_room para:", roomId);
+            socket.emit('join_room', { roomId, nickname });
+        };
+
+        if (!socket.connected) {
+            console.log("Conectando socket antes de entrar...");
+            socket.connect();
+            socket.once('connect', enviar);
         } else {
-             // Listener one-time para conectar e enviar
-             socket.once('connect', () => {
-                 socket.emit('join_room', { roomId, nickname });
-             });
-             socket.connect();
+            enviar();
         }
     };
 
     return (
         <GameContext.Provider value={{
-            view, setView, players, isHost, roomId, setRoomId, nickname, setNickname,
-            selectedGame, setSelectedGame, gameType, gameData, currentPhase, mySecret,
-            gameResult, isJoining, criarSala, entrarSala, sairDoJogo, socket
+            // Estados
+            view, setView,
+            players, isHost,
+            roomId, setRoomId,
+            nickname, setNickname,
+            selectedGame, setSelectedGame,
+            gameType, gameData,
+            currentPhase, mySecret,
+            gameResult, isJoining,
+            socket,
+            
+            // Ações
+            criarSala,
+            entrarSala,
+            sairDoJogo
         }}>
             {children}
         </GameContext.Provider>
