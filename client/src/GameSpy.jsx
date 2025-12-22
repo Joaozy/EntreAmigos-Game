@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { socket } from './socket';
-import { Eye, MapPin, UserSecret, Clock, Lock } from 'lucide-react';
+// MUDANÇA 1: Trocado UserSecret por VenetianMask
+import { Eye, MapPin, VenetianMask, Clock, Lock } from 'lucide-react';
 
 export default function GameSpy({ players, isHost, roomId, gameData, phase }) {
-  const [myRole, setMyRole] = useState(null);     // 'ESPIÃO' ou 'CIVIL'
+  const [myRole, setMyRole] = useState(null);
   const [myLocation, setMyLocation] = useState(null);
   const [timeLeft, setTimeLeft] = useState(0);
 
-  // Escuta o segredo individual
   useEffect(() => {
     socket.on('spy_secret', (data) => {
         setMyRole(data.role);
@@ -16,7 +16,6 @@ export default function GameSpy({ players, isHost, roomId, gameData, phase }) {
     return () => socket.off('spy_secret');
   }, []);
 
-  // Timer
   useEffect(() => {
       const timer = setInterval(() => {
           if (gameData?.endTime && phase === 'GAME') {
@@ -33,7 +32,6 @@ export default function GameSpy({ players, isHost, roomId, gameData, phase }) {
       return `${m}:${sec.toString().padStart(2, '0')}`;
   };
 
-  // TELA DE REVELAÇÃO (FIM DE JOGO)
   if (phase === 'REVEAL') {
       const spy = players.find(p => p.id === gameData.spyId);
       return (
@@ -66,10 +64,8 @@ export default function GameSpy({ players, isHost, roomId, gameData, phase }) {
       );
   }
 
-  // TELA DE JOGO
   return (
     <div className="min-h-screen bg-slate-900 text-white p-4 flex flex-col items-center">
-        {/* CABEÇALHO COM TIMER */}
         <div className="w-full max-w-md flex justify-between items-center mb-8 bg-slate-800 p-4 rounded-xl border border-slate-700 shadow-lg">
             <div className="flex items-center gap-2">
                 <Clock className={timeLeft < 60 ? "text-red-500 animate-pulse" : "text-emerald-400"} />
@@ -80,7 +76,6 @@ export default function GameSpy({ players, isHost, roomId, gameData, phase }) {
             <div className="text-xs font-bold text-slate-500 uppercase">O Espião</div>
         </div>
 
-        {/* CARTÃO DE IDENTIDADE */}
         <div className="w-full max-w-md bg-white text-slate-900 rounded-3xl p-8 shadow-2xl text-center relative overflow-hidden animate-in zoom-in duration-500">
             <div className={`absolute top-0 left-0 w-full h-4 ${myRole === 'ESPIÃO' ? 'bg-red-500' : 'bg-indigo-500'}`}></div>
             
@@ -89,7 +84,8 @@ export default function GameSpy({ players, isHost, roomId, gameData, phase }) {
             {myRole === 'ESPIÃO' ? (
                 <div className="flex flex-col items-center">
                     <div className="w-24 h-24 bg-red-100 text-red-600 rounded-full flex items-center justify-center mb-4">
-                         <UserSecret size={48} />
+                         {/* MUDANÇA 2: Usando VenetianMask aqui */}
+                         <VenetianMask size={48} />
                     </div>
                     <h1 className="text-4xl font-black text-red-600 mb-2">VOCÊ É O ESPIÃO!</h1>
                     <p className="text-slate-500 font-medium">Descubra o local sem ser descoberto.</p>
@@ -105,7 +101,6 @@ export default function GameSpy({ players, isHost, roomId, gameData, phase }) {
             )}
         </div>
 
-        {/* LISTA DE JOGADORES (Para lembrar quem está jogando) */}
         <div className="mt-8 w-full max-w-md">
             <h3 className="text-slate-500 text-xs font-bold uppercase mb-2 ml-2">Suspeitos</h3>
             <div className="grid grid-cols-2 gap-2">
@@ -118,7 +113,6 @@ export default function GameSpy({ players, isHost, roomId, gameData, phase }) {
             </div>
         </div>
 
-        {/* BOTÃO DE REVELAR (HOST) */}
         {isHost && (
             <button 
                 onClick={() => socket.emit('spy_reveal', { roomId })}

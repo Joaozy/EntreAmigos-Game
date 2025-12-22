@@ -7,14 +7,13 @@ import GameChaCafe from './GameChaCafe';
 import GameCodenames from './GameCodenames'; 
 import GameStop from './GameStop';           
 import GameTermo from './GameTermo'; 
-import GameSpy from './GameSpy'; // <--- IMPORTANTE: O novo jogo
+import GameSpy from './GameSpy';
 
 import Chat from './Chat';
 
-// Ícones
-import { Trash2, Gamepad2, Coffee, Loader2, LogOut, Eye, Hand, LayoutGrid, UserSecret, User, Users, Users2 } from 'lucide-react';
+// MUDANÇA 1: Trocado UserSecret por VenetianMask na importação
+import { Trash2, Gamepad2, Coffee, Loader2, LogOut, Eye, Hand, LayoutGrid, VenetianMask, User, Users, Users2 } from 'lucide-react';
 
-// --- CONFIGURAÇÃO DOS JOGOS ---
 const GAMES_CONFIG = [
   { 
     id: 'TERMO', 
@@ -62,7 +61,8 @@ const GAMES_CONFIG = [
     minPlayers: 3, 
     category: 'GALERA E TIMES (4+)', 
     desc: 'Descubra o intruso.', 
-    icon: UserSecret, 
+    // MUDANÇA 2: Usando VenetianMask aqui
+    icon: VenetianMask, 
     color: 'red',
     iconColor: 'bg-red-600'
   },
@@ -77,6 +77,9 @@ const GAMES_CONFIG = [
     iconColor: 'bg-teal-600'
   }
 ];
+
+// ... (O RESTO DO CÓDIGO PERMANECE IGUAL, NÃO PRECISA MUDAR NADA ABAIXO DAQUI) ...
+// Só copie o restante do App.jsx que você já tem ou mantenha o return/useEffect como estavam.
 
 export default function App() {
   let savedRoom = localStorage.getItem('saved_roomId');
@@ -322,4 +325,3 @@ export default function App() {
     </>
   );
 }
-
