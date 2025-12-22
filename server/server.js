@@ -8,6 +8,8 @@ const { startIto, registerItoHandlers } = require('./games/game_ito');
 const { startChaCafe, registerChaCafeHandlers } = require('./games/game_chacafe');
 const { startCodenames, registerCodenamesHandlers } = require('./games/game_codenames');
 const { startStop, registerStopHandlers } = require('./games/game_stop');
+// 1. IMPORTAR O TERMO
+const { startTermo, registerTermoHandlers } = require('./games/game_termo');
 
 const app = express();
 app.use(cors());
@@ -38,7 +40,7 @@ io.on('connection', (socket) => {
 
   socket.on('join_room', ({ roomId, nickname }) => joinRoomInternal(socket, roomId?.toUpperCase(), nickname, false));
 
-  // --- RECONEXÃO BLINDADA (Mantida aqui pois afeta todos) ---
+  // --- RECONEXÃO BLINDADA ---
   socket.on('rejoin_room', ({ roomId, nickname }) => {
     const room = rooms.get(roomId);
     if (!room) { socket.emit('error_msg', 'A sala expirou.'); return; }
@@ -50,11 +52,8 @@ io.on('connection', (socket) => {
        socket.join(roomId);
        if (room.host === oldSocketId) { room.host = socket.id; room.players[existingIndex].isHost = true; }
 
-       // Atualização de IDs nos dados dos jogos
        let gameDataUpdated = false;
        if (room.gameData) {
-           // Lógica de recuperação específica de cada jogo (simplificada aqui para brevidade, 
-           // idealmente poderia ser uma função exportada de cada módulo também, mas ok manter aqui)
            if (room.gameType === 'CHA_CAFE') {
                if (room.gameData.narratorId === oldSocketId) { room.gameData.narratorId = socket.id; gameDataUpdated = true; }
                if (room.gameData.lastGuesserId === oldSocketId) { room.gameData.lastGuesserId = socket.id; gameDataUpdated = true; }
@@ -73,6 +72,7 @@ io.on('connection', (socket) => {
            if (room.gameType === 'STOP') {
                if (room.gameData.stopCaller === oldSocketId) { room.gameData.stopCaller = socket.id; gameDataUpdated = true; }
            }
+           // Termo não guarda IDs no gameData, apenas chaves no objeto playersState, que já usamos o ID novo ao acessar.
        }
        
        socket.emit('joined_room', { 
@@ -90,10 +90,13 @@ io.on('connection', (socket) => {
   // --- ROTEADOR DE INÍCIO ---
   socket.on('start_game', ({ roomId }) => {
     const room = rooms.get(roomId); if (!room || room.host !== socket.id) return;
+    
+    // 2. ADICIONAR ROTA DO TERMO
     if (room.gameType === 'ITO') startIto(io, room, roomId);
     else if (room.gameType === 'CHA_CAFE') startChaCafe(io, room, roomId);
     else if (room.gameType === 'CODENAMES') startCodenames(io, room, roomId);
     else if (room.gameType === 'STOP') startStop(io, room, roomId);
+    else if (room.gameType === 'TERMO') startTermo(io, room, roomId);
   });
 
   socket.on('restart_game', ({ roomId }) => {
@@ -102,14 +105,16 @@ io.on('connection', (socket) => {
           if(room.gameType === 'CHA_CAFE') startChaCafe(io, room, roomId);
           if(room.gameType === 'CODENAMES') startCodenames(io, room, roomId);
           if(room.gameType === 'STOP') startStop(io, room, roomId);
+          if(room.gameType === 'TERMO') startTermo(io, room, roomId);
       }
   });
 
-  // --- REGISTRO DOS HANDLERS (Ouvintes de Eventos) ---
+  // --- REGISTRO DOS HANDLERS ---
   registerItoHandlers(io, socket, rooms);
   registerChaCafeHandlers(io, socket, rooms);
   registerCodenamesHandlers(io, socket, rooms);
   registerStopHandlers(io, socket, rooms);
+  registerTermoHandlers(io, socket, rooms); // 3. REGISTRAR OUVINTES DO TERMO
 
   // --- UTILITÁRIOS GERAIS ---
   socket.on('send_message', (data) => io.to(data.roomId).emit('receive_message', data));
