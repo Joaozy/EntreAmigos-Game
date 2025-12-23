@@ -193,10 +193,10 @@ const registerSpyHandlers = (io, socket, rooms) => {
 
         if (word.toUpperCase() === gd.secretWord.toUpperCase()) {
             gd.winner = 'SPY';
-            gd.winReason = 'O Espião foi descoberto, mas adivinhou o local!';
+            gd.winReason = 'O Espião foi descoberto, mas adivinhou a palavra secreta!';
         } else {
             gd.winner = 'CIVILIANS';
-            gd.winReason = `O Espião errou o local! Ele chutou "${word}".`;
+            gd.winReason = `O Espião errou a palavra! Ele chutou "${word}".`;
         }
         gd.phase = 'REVEAL';
         io.to(roomId).emit('game_over', { gameData: getPublicGameData(room), phase: 'REVEAL' });

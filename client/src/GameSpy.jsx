@@ -35,8 +35,9 @@ export default function GameSpy({ players, isHost, roomId, gameData, phase }) {
       socket.emit('spy_vote', { roomId, targetId });
   };
 
-  const chutarLocal = (word) => {
-      if(confirm(`Tem certeza que o local é ${word}?`)) {
+  const chutarPalavra = (word) => {
+      // CORREÇÃO: Texto genérico "a palavra"
+      if(confirm(`Tem certeza que a palavra secreta é ${word}?`)) {
           socket.emit('spy_guess_location', { roomId, word });
       }
   };
@@ -54,8 +55,10 @@ export default function GameSpy({ players, isHost, roomId, gameData, phase }) {
               </div>
 
               <div className="mb-8">
-                  <p className="text-slate-400 text-xs uppercase font-bold tracking-widest">O local era</p>
+                  {/* CORREÇÃO: "A palavra secreta era" em vez de "O local era" */}
+                  <p className="text-slate-400 text-xs uppercase font-bold tracking-widest">A palavra secreta era</p>
                   <h2 className="text-4xl font-black text-white mt-2">{gameData.secretWord}</h2>
+                  <p className="mt-2 text-indigo-300 font-bold uppercase text-xs tracking-widest">{gameData.category}</p>
               </div>
               
               <div className="bg-slate-800 p-4 rounded-2xl w-full max-w-xs border border-slate-700">
@@ -84,13 +87,14 @@ export default function GameSpy({ players, isHost, roomId, gameData, phase }) {
           <div className="min-h-screen bg-slate-900 p-6 flex flex-col items-center justify-center text-center">
               <h1 className="text-3xl font-black text-red-500 mb-2 animate-pulse">ESPIÃO DESCOBERTO!</h1>
               <p className="text-white mb-6 max-w-md">
-                  {imSpy ? "Você foi pego! Mas ainda pode vencer se adivinhar o local correto." : "O Espião foi pego! Agora ele tem uma chance de adivinhar o local."}
+                  {/* CORREÇÃO: Texto genérico "adivinhar a palavra" */}
+                  {imSpy ? "Você foi pego! Mas ainda pode vencer se adivinhar a palavra secreta." : "O Espião foi pego! Agora ele tem uma chance de adivinhar a palavra secreta."}
               </p>
               
               {imSpy ? (
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-3 w-full max-w-2xl">
                       {gameData.possibleWords.map(word => (
-                          <button key={word} onClick={() => chutarLocal(word)} className="bg-slate-800 hover:bg-red-600 text-white p-3 rounded-xl font-bold transition border border-slate-700 hover:border-red-400">
+                          <button key={word} onClick={() => chutarPalavra(word)} className="bg-slate-800 hover:bg-red-600 text-white p-3 rounded-xl font-bold transition border border-slate-700 hover:border-red-400">
                               {word}
                           </button>
                       ))}
@@ -169,7 +173,8 @@ export default function GameSpy({ players, isHost, roomId, gameData, phase }) {
                 <div>
                     <p className="text-xs font-bold uppercase opacity-70 mb-1">SUA IDENTIDADE</p>
                     <h2 className="text-2xl font-black text-white leading-none">
-                        {myRole === 'ESPIÃO' ? "VOCÊ É O ESPIÃO" : (myWord || "Carregando...")}
+                        {/* CORREÇÃO: "..." para não quebrar layout se word for null */}
+                        {myRole === 'ESPIÃO' ? "VOCÊ É O ESPIÃO" : (myWord || "...")}
                     </h2>
                 </div>
             </div>
@@ -227,7 +232,6 @@ export default function GameSpy({ players, isHost, roomId, gameData, phase }) {
             )}
         </div>
 
-        {/* BOTÃO DE INICIAR VOTAÇÃO (Só aparece na discussão para o Host) */}
         {isHost && isDiscussion && (
             <button 
                 onClick={() => socket.emit('spy_start_voting', { roomId })}

@@ -1,20 +1,29 @@
 import React, { useEffect, useState } from 'react';
 import { socket } from './socket';
 
-// Importação dos Componentes dos Jogos
-import GameTable from './GameTable';         
+// --- IMPORTAÇÃO DOS JOGOS ---
+import GameTable from './GameTable';         // ITO
 import GameChaCafe from './GameChaCafe';     
 import GameCodenames from './GameCodenames'; 
 import GameStop from './GameStop';           
 import GameTermo from './GameTermo'; 
-import GameSpy from './GameSpy';
+import GameSpy from './GameSpy';             
+import GameWhoAmI from './GameWhoAmI';       
+import GameCinemoji from './GameCinemoji';   
+import GameMegaQuiz from './GameMegaQuiz';   
+import GameDixit from './GameDixit';         // Novo: Imaginário
 
 import Chat from './Chat';
 
-// MUDANÇA 1: Trocado UserSecret por VenetianMask na importação
-import { Trash2, Gamepad2, Coffee, Loader2, LogOut, Eye, Hand, LayoutGrid, VenetianMask, User, Users, Users2 } from 'lucide-react';
+// --- ÍCONES (Lucide React) ---
+import { 
+  Trash2, Gamepad2, Coffee, Loader2, LogOut, Eye, Hand, LayoutGrid, 
+  VenetianMask, User, Users, Users2, Film, Brain, Palette
+} from 'lucide-react';
 
+// --- CONFIGURAÇÃO GERAL DOS JOGOS ---
 const GAMES_CONFIG = [
+  // --- SOLO / VERSUS (1+) ---
   { 
     id: 'TERMO', 
     name: 'Termo', 
@@ -25,6 +34,28 @@ const GAMES_CONFIG = [
     color: 'emerald',
     iconColor: 'bg-emerald-600'
   },
+  { 
+    id: 'CINEMOJI', 
+    name: 'CineMoji', 
+    minPlayers: 1, 
+    category: 'SOLO / VERSUS (1+)', 
+    desc: 'Adivinhe o filme pelos emojis.', 
+    icon: Film, 
+    color: 'yellow',
+    iconColor: 'bg-yellow-500' 
+  },
+  { 
+    id: 'MEGAQUIZ', 
+    name: 'Mega Quiz', 
+    minPlayers: 1, 
+    category: 'SOLO / VERSUS (1+)', 
+    desc: 'Apostas, roubos e perguntas.', 
+    icon: Brain, 
+    color: 'blue',
+    iconColor: 'bg-blue-600' 
+  },
+
+  // --- PEQUENOS GRUPOS (2+) ---
   { 
     id: 'STOP', 
     name: 'Stop!', 
@@ -56,30 +87,48 @@ const GAMES_CONFIG = [
     iconColor: 'bg-pink-600'
   },
   { 
+    id: 'WHOAMI', 
+    name: 'Quem Sou Eu?', 
+    minPlayers: 2, 
+    category: 'PEQUENOS GRUPOS (2+)', 
+    desc: 'Descubra seu personagem.', 
+    icon: User, 
+    color: 'cyan',
+    iconColor: 'bg-cyan-600'
+  },
+
+  // --- GALERA E TIMES (3+) ---
+  { 
     id: 'SPY', 
     name: 'O Espião', 
     minPlayers: 3, 
-    category: 'GALERA E TIMES (4+)', 
+    category: 'GALERA E TIMES (3+)', 
     desc: 'Descubra o intruso.', 
-    // MUDANÇA 2: Usando VenetianMask aqui
     icon: VenetianMask, 
     color: 'red',
     iconColor: 'bg-red-600'
   },
   { 
+    id: 'DIXIT', 
+    name: 'Imaginário', 
+    minPlayers: 3, 
+    category: 'GALERA E TIMES (3+)', 
+    desc: 'Dicas criativas e imagens.', 
+    icon: Palette, 
+    color: 'pink', 
+    iconColor: 'bg-pink-600'
+  },
+  { 
     id: 'CODENAMES', 
     name: 'Código Secreto', 
     minPlayers: 4, 
-    category: 'GALERA E TIMES (4+)', 
+    category: 'GALERA E TIMES (3+)', 
     desc: 'Espiões, dicas e times.', 
     icon: Eye, 
     color: 'teal',
     iconColor: 'bg-teal-600'
   }
 ];
-
-// ... (O RESTO DO CÓDIGO PERMANECE IGUAL, NÃO PRECISA MUDAR NADA ABAIXO DAQUI) ...
-// Só copie o restante do App.jsx que você já tem ou mantenha o return/useEffect como estavam.
 
 export default function App() {
   let savedRoom = localStorage.getItem('saved_roomId');
@@ -107,6 +156,7 @@ export default function App() {
   const [isJoining, setIsJoining] = useState(false);
 
   useEffect(() => {
+    // --- LÓGICA DE CONEXÃO E REJOIN ---
     const tentarReconectar = () => {
         const sRoom = localStorage.getItem('saved_roomId');
         const sNick = localStorage.getItem('saved_nickname');
@@ -121,6 +171,7 @@ export default function App() {
     const onConnect = () => tentarReconectar();
     socket.on('connect', onConnect);
     
+    // --- EVENTOS GERAIS DA SALA ---
     socket.on('joined_room', (data) => { 
       handleJoinSuccess(data.roomId, data.isHost);
       setPlayers(data.players); 
@@ -153,30 +204,38 @@ export default function App() {
         setCurrentPhase(phase);
     });
 
+    // Eventos Específicos
     socket.on('your_secret_number', (n) => setMySecret(n));
+    socket.on('dixit_hand', () => {}); // Ouve no componente Dixit
+    socket.on('spy_secret', () => {}); // Ouve no componente Spy
+    
     socket.on('phase_change', (data) => { setCurrentPhase(data.phase); setPlayers(data.players); });
     socket.on('player_submitted', ({ playerId }) => {
       setPlayers(prev => prev.map(p => p.id === playerId ? {...p, hasSubmitted: true} : p));
     });
     socket.on('order_updated', (p) => setPlayers(p));
     
+    // Game Over Genérico
     socket.on('game_over', (data) => {
       if(data.winnerWord || data.winner || data.secretWord) { 
+          // Logica para Termo, CineMoji, MegaQuiz, Espião, QuemSouEu
           setCurrentPhase(data.phase || 'VICTORY'); 
           setGameData(prev => ({
               ...prev,
               ...(data.gameData || {}),
               targetWord: data.targetWord || prev.targetWord,
               secretWord: data.secretWord || prev.secretWord, 
-              winner: data.winner || prev.winner
+              winner: data.winner || prev.winner,
+              results: data.results || prev.results
           }));
       } else if (data.results) { 
+          // Logica para ITO
           setGameResult(data);
           setPlayers(data.results); 
           setCurrentPhase('REVEAL'); 
-      } else if (data.gameData && data.phase === 'REVEAL') {
+      } else if (data.gameData && (data.phase === 'REVEAL' || data.phase === 'VICTORY')) {
           setGameData(data.gameData);
-          setCurrentPhase('REVEAL');
+          setCurrentPhase(data.phase);
       }
     });
 
@@ -192,21 +251,26 @@ export default function App() {
   const limparDadosLocais = () => { localStorage.removeItem('saved_roomId'); localStorage.removeItem('saved_nickname'); };
   const sairDoJogo = () => { limparDadosLocais(); setRoomId(''); setPlayers([]); setIsHost(false); setView('HOME'); setIsJoining(false); socket.disconnect(); window.location.href = "/"; };
   const handleJoinSuccess = (id, hostStatus) => { setRoomId(id); setIsHost(hostStatus); setIsJoining(false); localStorage.setItem('saved_roomId', id); };
+  
   const entrar = () => { if(nickname && roomId && !isJoining) { setIsJoining(true); localStorage.setItem('saved_nickname', nickname); if (!socket.connected) socket.connect(); socket.emit('join_room', { roomId, nickname }); } };
   const criar = () => { if(nickname && !isJoining) { setIsJoining(true); localStorage.setItem('saved_nickname', nickname); if (!socket.connected) socket.connect(); socket.emit('create_room', { nickname, gameType: selectedGame }); } };
+  
   const iniciar = () => socket.emit('start_game', { roomId });
   const expulsar = (targetId) => { if(confirm("Expulsar este jogador?")) socket.emit('kick_player', { roomId, targetId }); }
 
+  // --- REGRAS DE INÍCIO ---
   const selectedGameObj = GAMES_CONFIG.find(g => g.id === selectedGame) || GAMES_CONFIG[0];
   const activeGameId = gameType || 'ITO'; 
   const activeGameObj = GAMES_CONFIG.find(g => g.id === activeGameId) || GAMES_CONFIG[0];
   
   const canStart = players.length >= activeGameObj.minPlayers;
 
+  // --- TELA DE CARREGAMENTO ---
   if (view === 'LOADING') return (<div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white p-4 text-center"><Loader2 className="w-16 h-16 animate-spin text-indigo-500 mb-4" /><h2 className="text-xl font-bold">Reconectando...</h2><button onClick={sairDoJogo} className="mt-8 text-red-400 text-sm border border-red-900/50 p-2 rounded bg-red-900/20">Cancelar</button></div>);
 
+  // --- NOVA HOME PAGE COM CATEGORIAS ---
   if (view === 'HOME') {
-    const categories = ['SOLO / VERSUS (1+)', 'PEQUENOS GRUPOS (2+)', 'GALERA E TIMES (4+)'];
+    const categories = ['SOLO / VERSUS (1+)', 'PEQUENOS GRUPOS (2+)', 'GALERA E TIMES (3+)'];
     
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center p-6 font-sans">
@@ -225,7 +289,7 @@ export default function App() {
                   <h3 className="text-slate-500 font-bold text-sm uppercase tracking-widest mb-4 flex items-center gap-2 border-b border-slate-800 pb-2">
                     {cat.includes('1+') && <User size={16}/>}
                     {cat.includes('2+') && <Users2 size={16}/>}
-                    {cat.includes('4+') && <Users size={16}/>}
+                    {cat.includes('3+') && <Users size={16}/>}
                     {cat}
                   </h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -257,8 +321,10 @@ export default function App() {
     );
   }
 
+  // --- TELA DE LOGIN DINÂMICA ---
   if (view === 'LOGIN') {
       const theme = GAMES_CONFIG.find(g => g.id === selectedGame) || GAMES_CONFIG[0];
+      // Mapeamento manual de cores (Tailwind Safety)
       let btnClass = "bg-slate-600";
       if(theme.color === 'indigo') btnClass = "bg-indigo-600 hover:bg-indigo-700";
       if(theme.color === 'pink') btnClass = "bg-pink-600 hover:bg-pink-700";
@@ -266,6 +332,9 @@ export default function App() {
       if(theme.color === 'purple') btnClass = "bg-purple-600 hover:bg-purple-700";
       if(theme.color === 'emerald') btnClass = "bg-emerald-600 hover:bg-emerald-700";
       if(theme.color === 'red') btnClass = "bg-red-600 hover:bg-red-700";
+      if(theme.color === 'blue') btnClass = "bg-blue-600 hover:bg-blue-700";
+      if(theme.color === 'cyan') btnClass = "bg-cyan-600 hover:bg-cyan-700";
+      if(theme.color === 'yellow') btnClass = "bg-yellow-500 hover:bg-yellow-600 text-slate-900";
 
       return (
         <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
@@ -286,6 +355,7 @@ export default function App() {
       );
   }
 
+  // --- LOBBY DINÂMICO ---
   if (view === 'LOBBY') return (
     <div className="min-h-screen bg-slate-900 flex flex-col items-center pt-10 p-4">
       <div className="w-full max-w-md bg-white p-8 rounded-3xl shadow-2xl text-center relative animate-in zoom-in-95">
@@ -295,7 +365,7 @@ export default function App() {
            <span className="text-[10px] font-bold uppercase text-slate-400">JOGO SELECIONADO</span>
            <div className="flex items-center gap-2 text-slate-800 font-bold">
               {activeGameObj.name}
-              <span className="text-xs font-normal text-slate-500 bg-slate-100 px-2 py-0.5 rounded">Mín: {activeGameObj.minPlayers}</span>
+              <span className="text-xs font-normal text-slate-500 bg-slate-100 px-2 py-0.5 rounded">Mín: {activeGameObj.minPlayers} jogadores</span>
            </div>
         </div>
 
@@ -312,15 +382,22 @@ export default function App() {
     </div>
   );
 
+  // --- RENDERIZADOR DO JOGO ATIVO ---
   return (
     <>
       <div className="fixed top-4 left-4 z-50"><button onClick={sairDoJogo} className="bg-slate-800/50 hover:bg-red-600 text-white p-2 rounded-full shadow-lg transition backdrop-blur-sm"><LogOut size={20} /></button></div>
+      
       {gameType === 'ITO' && <GameTable players={players} isHost={isHost} mySecretNumber={mySecret} roomId={roomId} theme={gameData.theme} phase={currentPhase} gameResult={gameResult} />}
       {gameType === 'CHA_CAFE' && <GameChaCafe players={players} isHost={isHost} roomId={roomId} gameData={gameData} phase={currentPhase} />}
       {gameType === 'CODENAMES' && <GameCodenames players={players} isHost={isHost} roomId={roomId} gameData={gameData} phase={currentPhase} />}
       {gameType === 'STOP' && <GameStop players={players} isHost={isHost} roomId={roomId} gameData={gameData} phase={currentPhase} />}
       {gameType === 'TERMO' && <GameTermo players={players} isHost={isHost} roomId={roomId} gameData={gameData} phase={currentPhase} />}
       {gameType === 'SPY' && <GameSpy players={players} isHost={isHost} roomId={roomId} gameData={gameData} phase={currentPhase} />}
+      {gameType === 'WHOAMI' && <GameWhoAmI players={players} isHost={isHost} roomId={roomId} gameData={gameData} phase={currentPhase} />}
+      {gameType === 'CINEMOJI' && <GameCinemoji players={players} isHost={isHost} roomId={roomId} gameData={gameData} phase={currentPhase} />}
+      {gameType === 'MEGAQUIZ' && <GameMegaQuiz players={players} isHost={isHost} roomId={roomId} gameData={gameData} phase={currentPhase} />}
+      {gameType === 'DIXIT' && <GameDixit players={players} isHost={isHost} roomId={roomId} gameData={gameData} phase={currentPhase} />}
+
       <Chat roomId={roomId} nickname={nickname} />
     </>
   );
