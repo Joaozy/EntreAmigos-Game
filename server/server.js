@@ -142,7 +142,7 @@ io.on('connection', (socket) => {
         else if (room.gameType === 'CINEMOJI') module.startCinemoji(io, room, roomId);
         // Novos Jogos
         else if (room.gameType === 'DIXIT') module.startDixit(io, room, roomId);
-        else if (room.gameType === 'MEGAQUIZ') module.startMegaquiz(io, room, roomId);
+        else if (room.gameType === 'MEGAQUIZ') module.startMegaQuiz(io, room, roomId);
         else if (room.gameType === 'SPY') module.startSpy(io, room, roomId);
         else if (room.gameType === 'WHOAMI') module.startWhoami(io, room, roomId);
         
