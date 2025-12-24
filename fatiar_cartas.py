@@ -16,7 +16,7 @@ if not os.path.exists(OUTPUT_DIR):
     os.makedirs(OUTPUT_DIR)
 
 print(f"🚀 Iniciando Fatiamento Inteligente (Auto-Crop)...")
-card_counter = 1
+card_counter = 109
 
 for pdf_file in PDF_FILES:
     if not os.path.exists(pdf_file):

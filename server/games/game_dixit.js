@@ -1,7 +1,7 @@
 const { shuffle } = require('../utils/helpers');
 
 // --- CONFIGURAÇÕES ---
-const TOTAL_CARDS = 100; 
+const TOTAL_CARDS = 216; 
 const HAND_SIZE = 6;
 const TARGET_SCORE = 30; 
 
