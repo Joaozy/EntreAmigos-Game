@@ -1,97 +1,114 @@
-const MOVIES = require('../data/themes_cinemoji.json');
+const { shuffle } = require('../utils/helpers');
+let THEMES = [];
+try {
+    THEMES = require('../data/themes_cinemoji.json');
+} catch (e) {
+    // Backup
+    THEMES = [
+        { emojis: "🦁👑", title: "O Rei Leão" },
+        { emojis: "🚢🧊💔", title: "Titanic" },
+        { emojis: "🕷️👨", title: "Homem Aranha" },
+        { emojis: "👻🚫", title: "Caça Fantasmas" }
+    ];
+}
 
 const startCinemoji = (io, room, roomId) => {
+    let deck = shuffle([...THEMES]);
+    
+    room.players.forEach(p => p.score = 0);
+    
     room.gameData = {
-        currentMovieIndex: 0,
-        shuffledMovies: [...MOVIES].sort(() => Math.random() - 0.5),
-        score: {}, // { playerId: points }
-        roundEndTime: 0,
-        phase: 'PLAYING',
-        lastWinner: null
+        deck: deck,
+        currentTheme: null,
+        round: 0,
+        phase: 'GUESSING', // GUESSING, REVEAL
+        winners: [],
+        timer: null
     };
     
-    // Inicializa placar zerado
-    room.players.forEach(p => room.gameData.score[p.id] = 0);
     room.phase = 'GAME';
-
-    nextRound(io, room, roomId);
+    io.to(roomId).emit('game_started', { gameType: 'CINEMOJI', phase: 'GAME', players: room.players });
+    
+    startRound(io, room, roomId);
 };
 
-const nextRound = (io, room, roomId) => {
+const startRound = (io, room, roomId) => {
     const gd = room.gameData;
     
-    // Verifica se acabou os filmes
-    if (gd.currentMovieIndex >= gd.shuffledMovies.length) {
-        io.to(roomId).emit('game_over', { 
-            gameData: getPublicData(room), 
-            winner: getWinner(room) 
-        });
+    if (gd.deck.length === 0) {
+        // Fim de jogo
+        const winner = room.players.sort((a,b) => b.score - a.score)[0];
+        io.to(roomId).emit('game_over', { winner, results: room.players });
         return;
     }
 
-    const currentMovie = gd.shuffledMovies[gd.currentMovieIndex];
-    gd.lastWinner = null;
+    gd.round++;
+    gd.currentTheme = gd.deck.pop();
+    gd.phase = 'GUESSING';
+    gd.winners = [];
     
-    // Envia novo emoji
-    io.to(roomId).emit('game_started', {
-        gameType: 'CINEMOJI',
-        phase: 'GAME',
-        gameData: getPublicData(room),
-        players: room.players
-    });
+    // --- TIMER DE 60 SEGUNDOS ---
+    let timeLeft = 60;
+    if (gd.timer) clearInterval(gd.timer);
+    
+    io.to(roomId).emit('update_game_data', { gameData: getPublicData(room), phase: 'GUESSING' });
+
+    gd.timer = setInterval(() => {
+        timeLeft--;
+        io.to(roomId).emit('cinemoji_timer', timeLeft); // Envia o tempo para o front
+
+        if (timeLeft <= 0) {
+            clearInterval(gd.timer);
+            // Tempo acabou: Revela a resposta sem vencedores
+            gd.phase = 'REVEAL';
+            io.to(roomId).emit('update_game_data', { gameData: getPublicData(room), phase: 'REVEAL' });
+            
+            setTimeout(() => {
+                startRound(io, room, roomId);
+            }, 5000);
+        }
+    }, 1000);
 };
 
 const getPublicData = (room) => {
-    const gd = room.gameData;
-    const current = gd.shuffledMovies[gd.currentMovieIndex] || {};
     return {
-        emojis: current.emojis,
-        score: gd.score,
-        phase: gd.phase,
-        lastWinner: gd.lastWinner
+        emojis: room.gameData.currentTheme.emojis,
+        title: room.gameData.phase === 'REVEAL' ? room.gameData.currentTheme.title : null, // Esconde título
+        round: room.gameData.round,
+        winners: room.gameData.winners
     };
-};
-
-const getWinner = (room) => {
-    const scores = room.gameData.score;
-    const sorted = Object.entries(scores).sort((a,b) => b[1] - a[1]);
-    if (sorted.length === 0) return null;
-    const winnerId = sorted[0][0];
-    return room.players.find(p => p.id === winnerId)?.nickname || 'Alguém';
 };
 
 const registerCinemojiHandlers = (io, socket, rooms) => {
     socket.on('cinemoji_guess', ({ roomId, guess }) => {
         const room = rooms.get(roomId);
-        if (!room || room.gameType !== 'CINEMOJI') return;
+        if (!room || room.gameData.phase !== 'GUESSING') return;
         
         const gd = room.gameData;
-        const currentMovie = gd.shuffledMovies[gd.currentMovieIndex];
+        const correctTitle = gd.currentTheme.title.toLowerCase().trim();
+        const userGuess = guess.toLowerCase().trim();
         
-        // Normaliza para comparar (remove acentos e deixa minusculo)
-        const normalize = (str) => str.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-        const userGuess = normalize(guess);
-        
-        const isCorrect = currentMovie.answers.some(ans => normalize(ans) === userGuess);
+        // Verifica resposta (simplificada, pode usar string similarity se quiser)
+        if (userGuess === correctTitle) {
+            const player = room.players.find(p => p.id === socket.id);
+            if (player && !gd.winners.includes(player.nickname)) {
+                
+                // Pontuação baseada na ordem de chegada
+                const points = gd.winners.length === 0 ? 10 : (gd.winners.length === 1 ? 5 : 3);
+                player.score += points;
+                gd.winners.push(player.nickname);
+                
+                io.to(roomId).emit('receive_message', { nickname: 'SISTEMA', text: `${player.nickname} acertou!` });
+                io.to(roomId).emit('update_players', room.players);
 
-        if (isCorrect) {
-            // Pontua
-            gd.score[socket.id] = (gd.score[socket.id] || 0) + 1;
-            gd.lastWinner = { nickname: room.players.find(p=>p.id===socket.id)?.nickname, answer: currentMovie.answers[0] };
-            
-            // Avança
-            gd.currentMovieIndex++;
-            
-            // Avisa que acertou e manda o próximo
-            io.to(roomId).emit('receive_message', { nickname: 'SISTEMA', text: `🎬 ${gd.lastWinner.nickname} acertou! Era "${gd.lastWinner.answer}"` });
-            
-            // Pequeno delay para lerem que alguém acertou
-            setTimeout(() => {
-                nextRound(io, room, roomId);
-            }, 2000);
-            
-            // Atualiza tela (mostra quem ganhou a rodada)
-            io.to(roomId).emit('update_game_data', { gameData: getPublicData(room), phase: 'ROUND_WIN' });
+                // Se todos acertaram, encerra logo
+                if (gd.winners.length === room.players.length) {
+                    clearInterval(gd.timer);
+                    gd.phase = 'REVEAL';
+                    io.to(roomId).emit('update_game_data', { gameData: getPublicData(room), phase: 'REVEAL' });
+                    setTimeout(() => startRound(io, room, roomId), 4000);
+                }
+            }
         }
     });
 };

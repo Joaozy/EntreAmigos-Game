@@ -11,123 +11,28 @@ import GameSpy from './GameSpy';
 import GameWhoAmI from './GameWhoAmI';       
 import GameCinemoji from './GameCinemoji';   
 import GameMegaQuiz from './GameMegaQuiz';   
-import GameDixit from './GameDixit';         // Novo: Imaginário
+import GameDixit from './GameDixit';         
 
 import Chat from './Chat';
 
 // --- ÍCONES (Lucide React) ---
 import { 
   Trash2, Gamepad2, Coffee, Loader2, LogOut, Eye, Hand, LayoutGrid, 
-  VenetianMask, User, Users, Users2, Film, Brain, Palette
+  VenetianMask, User, Users, Users2, Film, Brain, Palette, Undo2
 } from 'lucide-react';
 
 // --- CONFIGURAÇÃO GERAL DOS JOGOS ---
 const GAMES_CONFIG = [
-  // --- SOLO / VERSUS (1+) ---
-  { 
-    id: 'TERMO', 
-    name: 'Termo', 
-    minPlayers: 1, 
-    category: 'SOLO / VERSUS (1+)', 
-    desc: 'Acerte a palavra de 5 letras.', 
-    icon: LayoutGrid, 
-    color: 'emerald',
-    iconColor: 'bg-emerald-600'
-  },
-  { 
-    id: 'CINEMOJI', 
-    name: 'CineMoji', 
-    minPlayers: 1, 
-    category: 'SOLO / VERSUS (1+)', 
-    desc: 'Adivinhe o filme pelos emojis.', 
-    icon: Film, 
-    color: 'yellow',
-    iconColor: 'bg-yellow-500' 
-  },
-  { 
-    id: 'MEGAQUIZ', 
-    name: 'Mega Quiz', 
-    minPlayers: 1, 
-    category: 'SOLO / VERSUS (1+)', 
-    desc: 'Apostas, roubos e perguntas.', 
-    icon: Brain, 
-    color: 'blue',
-    iconColor: 'bg-blue-600' 
-  },
-
-  // --- PEQUENOS GRUPOS (2+) ---
-  { 
-    id: 'STOP', 
-    name: 'Stop!', 
-    minPlayers: 2, 
-    category: 'PEQUENOS GRUPOS (2+)', 
-    desc: 'Adedonha clássica rápida.', 
-    icon: Hand, 
-    color: 'purple',
-    iconColor: 'bg-purple-600'
-  },
-  { 
-    id: 'ITO', 
-    name: 'ITO', 
-    minPlayers: 2, 
-    category: 'PEQUENOS GRUPOS (2+)', 
-    desc: 'Sincronia e cooperação.', 
-    icon: Gamepad2, 
-    color: 'indigo',
-    iconColor: 'bg-indigo-600'
-  },
-  { 
-    id: 'CHA_CAFE', 
-    name: 'Chá ou Café', 
-    minPlayers: 2, 
-    category: 'PEQUENOS GRUPOS (2+)', 
-    desc: 'Adivinhação por contexto.', 
-    icon: Coffee, 
-    color: 'pink',
-    iconColor: 'bg-pink-600'
-  },
-  { 
-    id: 'WHOAMI', 
-    name: 'Quem Sou Eu?', 
-    minPlayers: 2, 
-    category: 'PEQUENOS GRUPOS (2+)', 
-    desc: 'Descubra seu personagem.', 
-    icon: User, 
-    color: 'cyan',
-    iconColor: 'bg-cyan-600'
-  },
-
-  // --- GALERA E TIMES (3+) ---
-  { 
-    id: 'SPY', 
-    name: 'O Espião', 
-    minPlayers: 3, 
-    category: 'GALERA E TIMES (3+)', 
-    desc: 'Descubra o intruso.', 
-    icon: VenetianMask, 
-    color: 'red',
-    iconColor: 'bg-red-600'
-  },
-  { 
-    id: 'DIXIT', 
-    name: 'Imaginário', 
-    minPlayers: 3, 
-    category: 'GALERA E TIMES (3+)', 
-    desc: 'Dicas criativas e imagens.', 
-    icon: Palette, 
-    color: 'pink', 
-    iconColor: 'bg-pink-600'
-  },
-  { 
-    id: 'CODENAMES', 
-    name: 'Código Secreto', 
-    minPlayers: 4, 
-    category: 'GALERA E TIMES (3+)', 
-    desc: 'Espiões, dicas e times.', 
-    icon: Eye, 
-    color: 'teal',
-    iconColor: 'bg-teal-600'
-  }
+  { id: 'TERMO', name: 'Termo', minPlayers: 1, category: 'SOLO / VERSUS (1+)', desc: 'Acerte a palavra de 5 letras.', icon: LayoutGrid, color: 'emerald', iconColor: 'bg-emerald-600' },
+  { id: 'CINEMOJI', name: 'CineMoji', minPlayers: 1, category: 'SOLO / VERSUS (1+)', desc: 'Adivinhe o filme pelos emojis.', icon: Film, color: 'yellow', iconColor: 'bg-yellow-500' },
+  { id: 'MEGAQUIZ', name: 'Mega Quiz', minPlayers: 1, category: 'SOLO / VERSUS (1+)', desc: 'Apostas, roubos e perguntas.', icon: Brain, color: 'blue', iconColor: 'bg-blue-600' },
+  { id: 'STOP', name: 'Stop!', minPlayers: 2, category: 'PEQUENOS GRUPOS (2+)', desc: 'Adedonha clássica rápida.', icon: Hand, color: 'purple', iconColor: 'bg-purple-600'},
+  { id: 'ITO', name: 'ITO', minPlayers: 2, category: 'PEQUENOS GRUPOS (2+)', desc: 'Sincronia e cooperação.', icon: Gamepad2, color: 'indigo', iconColor: 'bg-indigo-600'},
+  { id: 'CHA_CAFE', name: 'Chá ou Café', minPlayers: 2, category: 'PEQUENOS GRUPOS (2+)', desc: 'Adivinhação por contexto.', icon: Coffee, color: 'pink', iconColor: 'bg-pink-600'},
+  { id: 'WHOAMI', name: 'Quem Sou Eu?', minPlayers: 2, category: 'PEQUENOS GRUPOS (2+)', desc: 'Descubra seu personagem.', icon: User, color: 'cyan', iconColor: 'bg-cyan-600'},
+  { id: 'SPY', name: 'O Espião', minPlayers: 3, category: 'GALERA E TIMES (3+)', desc: 'Descubra o intruso.', icon: VenetianMask, color: 'red', iconColor: 'bg-red-600'},
+  { id: 'DIXIT', name: 'Imaginário', minPlayers: 3, category: 'GALERA E TIMES (3+)', desc: 'Dicas criativas e imagens.', icon: Palette, color: 'pink', iconColor: 'bg-pink-600'},
+  { id: 'CODENAMES', name: 'Código Secreto', minPlayers: 4, category: 'GALERA E TIMES (3+)', desc: 'Espiões, dicas e times.', icon: Eye, color: 'teal', iconColor: 'bg-teal-600'}
 ];
 
 export default function App() {
@@ -155,23 +60,28 @@ export default function App() {
 
   const [isJoining, setIsJoining] = useState(false);
 
+  // --- CORREÇÃO AQUI: Dependência vazia [] para não reiniciar conexão ao mudar Host ---
   useEffect(() => {
-    // --- LÓGICA DE CONEXÃO E REJOIN ---
+    // 1. Tentar Reconectar
     const tentarReconectar = () => {
         const sRoom = localStorage.getItem('saved_roomId');
         const sNick = localStorage.getItem('saved_nickname');
         if (sRoom && sNick) {
-            socket.emit('rejoin_room', { roomId: sRoom, nickname: sNick });
+            if (socket.connected) {
+                socket.emit('rejoin_room', { roomId: sRoom, nickname: sNick });
+            } else {
+                socket.connect();
+            }
         }
     };
 
     if (!socket.connected) socket.connect();
-    else tentarReconectar(); 
+    else tentarReconectar();
 
     const onConnect = () => tentarReconectar();
     socket.on('connect', onConnect);
     
-    // --- EVENTOS GERAIS DA SALA ---
+    // 2. Listeners de Sala
     socket.on('joined_room', (data) => { 
       handleJoinSuccess(data.roomId, data.isHost);
       setPlayers(data.players); 
@@ -188,8 +98,27 @@ export default function App() {
     });
 
     socket.on('room_created', (id) => handleJoinSuccess(id, true));
-    socket.on('update_players', (p) => setPlayers(p));
     
+    // --- CORREÇÃO DO ATUALIZAR PLAYERS ---
+    // Usamos 'setIsHost(prev => ...)' para não depender do valor antigo no closure
+    socket.on('update_players', (p) => {
+        setPlayers(p);
+        
+        const myId = socket.id;
+        const me = p.find(player => player.id === myId);
+        
+        if (me) {
+            setIsHost(prevIsHost => {
+                // Só atualiza se mudou de verdade
+                if (prevIsHost !== me.isHost) return me.isHost;
+                return prevIsHost;
+            });
+        }
+    });
+
+    socket.on('msg_success', (msg) => alert(msg));
+    
+    // 3. Listeners de Jogo
     socket.on('game_started', (data) => { 
       setPlayers(data.players); 
       setGameType(data.gameType); 
@@ -204,10 +133,19 @@ export default function App() {
         setCurrentPhase(phase);
     });
 
+    socket.on('returned_to_lobby', (data) => {
+        setCurrentPhase('LOBBY');
+        setView('LOBBY');
+        setPlayers(data.players);
+        setGameData({});
+        setGameResult(null);
+    });
+
     // Eventos Específicos
     socket.on('your_secret_number', (n) => setMySecret(n));
-    socket.on('dixit_hand', () => {}); // Ouve no componente Dixit
-    socket.on('spy_secret', () => {}); // Ouve no componente Spy
+    socket.on('dixit_hand', () => {}); 
+    socket.on('dixit_my_card', () => {});
+    socket.on('spy_secret', () => {}); 
     
     socket.on('phase_change', (data) => { setCurrentPhase(data.phase); setPlayers(data.players); });
     socket.on('player_submitted', ({ playerId }) => {
@@ -215,27 +153,14 @@ export default function App() {
     });
     socket.on('order_updated', (p) => setPlayers(p));
     
-    // Game Over Genérico
     socket.on('game_over', (data) => {
       if(data.winnerWord || data.winner || data.secretWord) { 
-          // Logica para Termo, CineMoji, MegaQuiz, Espião, QuemSouEu
           setCurrentPhase(data.phase || 'VICTORY'); 
-          setGameData(prev => ({
-              ...prev,
-              ...(data.gameData || {}),
-              targetWord: data.targetWord || prev.targetWord,
-              secretWord: data.secretWord || prev.secretWord, 
-              winner: data.winner || prev.winner,
-              results: data.results || prev.results
-          }));
+          setGameData(prev => ({ ...prev, ...(data.gameData || {}), targetWord: data.targetWord || prev.targetWord, secretWord: data.secretWord || prev.secretWord, winner: data.winner || prev.winner, results: data.results || prev.results }));
       } else if (data.results) { 
-          // Logica para ITO
-          setGameResult(data);
-          setPlayers(data.results); 
-          setCurrentPhase('REVEAL'); 
+          setGameResult(data); setPlayers(data.results); setCurrentPhase('REVEAL'); 
       } else if (data.gameData && (data.phase === 'REVEAL' || data.phase === 'VICTORY')) {
-          setGameData(data.gameData);
-          setCurrentPhase(data.phase);
+          setGameData(data.gameData); setCurrentPhase(data.phase);
       }
     });
 
@@ -245,8 +170,14 @@ export default function App() {
         setIsJoining(false);
     });
 
-    return () => { socket.off('connect', onConnect); socket.disconnect(); };
-  }, []);
+    // Cleanup: Remove listeners mas NÃO desconecta o socket a menos que o componente desmonte de verdade
+    return () => { 
+        socket.off('connect', onConnect); 
+        socket.off('update_players'); // Importante remover listeners específicos
+        socket.off('joined_room');
+        // socket.disconnect(); <--- REMOVIDO PARA EVITAR QUEDA AO ATUALIZAR ESTADO
+    };
+  }, []); // <--- IMPORTANTE: ARRAY VAZIO
 
   const limparDadosLocais = () => { localStorage.removeItem('saved_roomId'); localStorage.removeItem('saved_nickname'); };
   const sairDoJogo = () => { limparDadosLocais(); setRoomId(''); setPlayers([]); setIsHost(false); setView('HOME'); setIsJoining(false); socket.disconnect(); window.location.href = "/"; };
@@ -257,59 +188,42 @@ export default function App() {
   
   const iniciar = () => socket.emit('start_game', { roomId });
   const expulsar = (targetId) => { if(confirm("Expulsar este jogador?")) socket.emit('kick_player', { roomId, targetId }); }
+  
+  // Botão de Voltar ao Lobby
+  const voltarLobby = () => { if(confirm("Tem certeza? O jogo atual será encerrado e todos voltarão ao Lobby.")) socket.emit('return_to_lobby', { roomId }); }
 
-  // --- REGRAS DE INÍCIO ---
   const selectedGameObj = GAMES_CONFIG.find(g => g.id === selectedGame) || GAMES_CONFIG[0];
   const activeGameId = gameType || 'ITO'; 
   const activeGameObj = GAMES_CONFIG.find(g => g.id === activeGameId) || GAMES_CONFIG[0];
-  
   const canStart = players.length >= activeGameObj.minPlayers;
 
-  // --- TELA DE CARREGAMENTO ---
   if (view === 'LOADING') return (<div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white p-4 text-center"><Loader2 className="w-16 h-16 animate-spin text-indigo-500 mb-4" /><h2 className="text-xl font-bold">Reconectando...</h2><button onClick={sairDoJogo} className="mt-8 text-red-400 text-sm border border-red-900/50 p-2 rounded bg-red-900/20">Cancelar</button></div>);
 
-  // --- NOVA HOME PAGE COM CATEGORIAS ---
   if (view === 'HOME') {
     const categories = ['SOLO / VERSUS (1+)', 'PEQUENOS GRUPOS (2+)', 'GALERA E TIMES (3+)'];
-    
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center p-6 font-sans">
         <div className="text-center mb-10 mt-8">
           <h1 className="text-4xl md:text-6xl font-black text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-purple-500 mb-2">ENTREAMIGOS</h1>
           <p className="text-slate-400 text-lg">Escolha o jogo ideal para seu grupo</p>
         </div>
-
         <div className="w-full max-w-6xl space-y-10 mb-10">
           {categories.map(cat => {
              const gamesInCat = GAMES_CONFIG.filter(g => g.category === cat);
              if (gamesInCat.length === 0) return null;
-
              return (
                <div key={cat} className="animate-in fade-in slide-in-from-bottom-4 duration-700">
                   <h3 className="text-slate-500 font-bold text-sm uppercase tracking-widest mb-4 flex items-center gap-2 border-b border-slate-800 pb-2">
-                    {cat.includes('1+') && <User size={16}/>}
-                    {cat.includes('2+') && <Users2 size={16}/>}
-                    {cat.includes('3+') && <Users size={16}/>}
-                    {cat}
+                    {cat.includes('1+') && <User size={16}/>}{cat.includes('2+') && <Users2 size={16}/>}{cat.includes('3+') && <Users size={16}/>}{cat}
                   </h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                     {gamesInCat.map(game => (
-                      <div 
-                        key={game.id} 
-                        onClick={() => { setSelectedGame(game.id); setView('LOGIN'); }} 
-                        className={`group bg-slate-800/50 hover:bg-slate-800 rounded-2xl p-5 cursor-pointer border-2 border-slate-700 hover:border-${game.color}-500 transition-all hover:-translate-y-1 relative overflow-hidden`}
-                      >
-                         <div className={`absolute top-0 right-0 p-2 opacity-10 group-hover:opacity-20 transition`}>
-                            <game.icon size={80} />
-                         </div>
-                         <div className={`w-12 h-12 ${game.iconColor} rounded-xl flex items-center justify-center mb-3 text-white shadow-lg`}>
-                            <game.icon size={24} />
-                         </div>
+                      <div key={game.id} onClick={() => { setSelectedGame(game.id); setView('LOGIN'); }} className={`group bg-slate-800/50 hover:bg-slate-800 rounded-2xl p-5 cursor-pointer border-2 border-slate-700 hover:border-${game.color}-500 transition-all hover:-translate-y-1 relative overflow-hidden`}>
+                         <div className={`absolute top-0 right-0 p-2 opacity-10 group-hover:opacity-20 transition`}><game.icon size={80} /></div>
+                         <div className={`w-12 h-12 ${game.iconColor} rounded-xl flex items-center justify-center mb-3 text-white shadow-lg`}><game.icon size={24} /></div>
                          <h2 className="text-lg font-bold text-white">{game.name}</h2>
                          <p className="text-slate-400 text-xs mt-1">{game.desc}</p>
-                         <div className="mt-3 inline-block bg-slate-900/50 px-2 py-1 rounded text-[10px] font-bold text-slate-500">
-                            Mín. {game.minPlayers} jogadores
-                         </div>
+                         <div className="mt-3 inline-block bg-slate-900/50 px-2 py-1 rounded text-[10px] font-bold text-slate-500">Mín. {game.minPlayers} jogadores</div>
                       </div>
                     ))}
                   </div>
@@ -321,10 +235,8 @@ export default function App() {
     );
   }
 
-  // --- TELA DE LOGIN DINÂMICA ---
   if (view === 'LOGIN') {
       const theme = GAMES_CONFIG.find(g => g.id === selectedGame) || GAMES_CONFIG[0];
-      // Mapeamento manual de cores (Tailwind Safety)
       let btnClass = "bg-slate-600";
       if(theme.color === 'indigo') btnClass = "bg-indigo-600 hover:bg-indigo-700";
       if(theme.color === 'pink') btnClass = "bg-pink-600 hover:bg-pink-700";
@@ -342,10 +254,7 @@ export default function App() {
             <button onClick={() => setView('HOME')} className="absolute top-4 left-4 text-slate-400 hover:text-slate-600 font-bold text-xs uppercase">← Voltar</button>
             <div className="text-center pt-4">
               <h1 className="text-3xl font-black text-slate-800">Preparar Jogo</h1>
-              <div className="flex items-center justify-center gap-2 mt-2">
-                 <theme.icon size={20} className={`text-${theme.color}-600`} />
-                 <p className={`text-${theme.color}-600 text-sm font-bold uppercase tracking-wider`}>{theme.name}</p>
-              </div>
+              <div className="flex items-center justify-center gap-2 mt-2"><theme.icon size={20} className={`text-${theme.color}-600`} /><p className={`text-${theme.color}-600 text-sm font-bold uppercase tracking-wider`}>{theme.name}</p></div>
             </div>
             <input className="w-full bg-slate-100 border-2 border-slate-200 p-4 rounded-xl font-bold outline-none" placeholder="Seu Apelido" value={nickname} onChange={e => setNickname(e.target.value)} maxLength={12}/>
             <button className={`w-full text-white p-4 rounded-xl font-bold shadow-lg transition ${btnClass}`} onClick={criar} disabled={isJoining || !nickname}>{isJoining ? 'Criando...' : 'Criar Nova Sala'}</button>
@@ -355,37 +264,32 @@ export default function App() {
       );
   }
 
-  // --- LOBBY DINÂMICO ---
   if (view === 'LOBBY') return (
     <div className="min-h-screen bg-slate-900 flex flex-col items-center pt-10 p-4">
       <div className="w-full max-w-md bg-white p-8 rounded-3xl shadow-2xl text-center relative animate-in zoom-in-95">
         <div className="flex justify-between items-start mb-6"><button onClick={sairDoJogo} className="text-xs font-bold text-red-400 hover:text-red-600 bg-red-50 px-2 py-1 rounded flex items-center gap-1"><LogOut size={12}/> SAIR</button><h1 className="text-4xl font-black text-slate-800 cursor-pointer" onClick={() => navigator.clipboard.writeText(roomId)}>{roomId}</h1><div className="w-8"></div></div>
-        
-        <div className="mb-4 text-left">
-           <span className="text-[10px] font-bold uppercase text-slate-400">JOGO SELECIONADO</span>
-           <div className="flex items-center gap-2 text-slate-800 font-bold">
-              {activeGameObj.name}
-              <span className="text-xs font-normal text-slate-500 bg-slate-100 px-2 py-0.5 rounded">Mín: {activeGameObj.minPlayers} jogadores</span>
-           </div>
-        </div>
-
+        <div className="mb-4 text-left"><span className="text-[10px] font-bold uppercase text-slate-400">JOGO SELECIONADO</span><div className="flex items-center gap-2 text-slate-800 font-bold">{activeGameObj.name}<span className="text-xs font-normal text-slate-500 bg-slate-100 px-2 py-0.5 rounded">Mín: {activeGameObj.minPlayers} jogadores</span></div></div>
         <div className="text-left mb-8 bg-slate-50 p-6 rounded-2xl"><h3 className="font-bold text-slate-500 text-sm uppercase mb-4">Jogadores ({players.length})</h3><ul className="space-y-3">{players.map(p => (<li key={p.id} className="flex items-center gap-3 group"><div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white ${p.isHost ? 'bg-slate-800' : 'bg-slate-400'}`}>{p.nickname[0].toUpperCase()}</div><span className="font-bold text-slate-700 flex-1">{p.nickname}</span>{isHost && !p.isHost && <button onClick={() => expulsar(p.id)} className="text-red-300 hover:text-red-500"><Trash2 size={16} /></button>}</li>))}</ul></div>
-        
-        {isHost ? (
-          <div className="space-y-2">
-            <button className="w-full text-white bg-slate-800 p-4 rounded-xl font-bold text-lg shadow-xl hover:scale-105 transition disabled:opacity-50 disabled:cursor-not-allowed" onClick={iniciar} disabled={!canStart}>INICIAR JOGO 🚀</button>
-            {!canStart && <p className="text-xs text-red-400 font-bold">Precisa de pelo menos {activeGameObj.minPlayers} jogadores.</p>}
-          </div>
-        ) : (<div className="text-slate-400 font-medium animate-pulse py-3 text-sm">Aguardando Host...</div>)}
+        {isHost ? (<div className="space-y-2"><button className="w-full text-white bg-slate-800 p-4 rounded-xl font-bold text-lg shadow-xl hover:scale-105 transition disabled:opacity-50 disabled:cursor-not-allowed" onClick={iniciar} disabled={!canStart}>INICIAR JOGO 🚀</button>{!canStart && <p className="text-xs text-red-400 font-bold">Precisa de pelo menos {activeGameObj.minPlayers} jogadores.</p>}</div>) : (<div className="text-slate-400 font-medium animate-pulse py-3 text-sm">Aguardando Host...</div>)}
       </div>
       <Chat roomId={roomId} nickname={nickname} />
     </div>
   );
 
-  // --- RENDERIZADOR DO JOGO ATIVO ---
   return (
     <>
       <div className="fixed top-4 left-4 z-50"><button onClick={sairDoJogo} className="bg-slate-800/50 hover:bg-red-600 text-white p-2 rounded-full shadow-lg transition backdrop-blur-sm"><LogOut size={20} /></button></div>
+      
+      {isHost && view === 'GAME' && (
+          <div className="fixed top-4 right-20 z-50">
+             <button 
+                onClick={voltarLobby} 
+                className="bg-indigo-600/90 hover:bg-indigo-500 text-white px-4 py-2 rounded-full shadow-lg transition backdrop-blur-sm flex items-center gap-2 font-bold text-xs"
+             >
+                <Undo2 size={16} /> LOBBY
+             </button>
+          </div>
+      )}
       
       {gameType === 'ITO' && <GameTable players={players} isHost={isHost} mySecretNumber={mySecret} roomId={roomId} theme={gameData.theme} phase={currentPhase} gameResult={gameResult} />}
       {gameType === 'CHA_CAFE' && <GameChaCafe players={players} isHost={isHost} roomId={roomId} gameData={gameData} phase={currentPhase} />}

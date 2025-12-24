@@ -118,60 +118,41 @@ io.on('connection', (socket) => {
     }
   });
 
-  // --- 2. ROTEADOR DE INÍCIO (ATUALIZADO PARA TODOS OS JOGOS) ---
+  // --- ROTEADORES DE JOGO ---
   socket.on('start_game', ({ roomId }) => {
-    console.log(`[START] Recebido pedido de início para sala ${roomId} do socket ${socket.id}`);
-    
     const room = rooms.get(roomId); 
-    
-    if (!room) { console.error(`[START ERRO] Sala ${roomId} não encontrada.`); return; }
-    if (room.host !== socket.id) { console.warn(`[START BLOQUEADO] Host inválido.`); return; }
+    if (!room || room.host !== socket.id) return;
     
     const module = gameModules[room.gameType];
-    if (!module) { console.error(`[START ERRO] Módulo '${room.gameType}' não carregado.`); return; }
-
-    console.log(`[START] Iniciando lógica para ${room.gameType}...`);
-
-    try {
-        // Rotas explícitas para evitar erros dinâmicos
+    if (module) {
+        // Mapeamento manual para segurança
         if (room.gameType === 'ITO') module.startIto(io, room, roomId);
         else if (room.gameType === 'CHA_CAFE') module.startChaCafe(io, room, roomId);
         else if (room.gameType === 'CODENAMES') module.startCodenames(io, room, roomId);
         else if (room.gameType === 'STOP') module.startStop(io, room, roomId);
         else if (room.gameType === 'TERMO') module.startTermo(io, room, roomId);
         else if (room.gameType === 'CINEMOJI') module.startCinemoji(io, room, roomId);
-        // Novos Jogos
         else if (room.gameType === 'DIXIT') module.startDixit(io, room, roomId);
         else if (room.gameType === 'MEGAQUIZ') module.startMegaQuiz(io, room, roomId);
         else if (room.gameType === 'SPY') module.startSpy(io, room, roomId);
-        else if (room.gameType === 'WHOAMI') module.startWhoami(io, room, roomId);
-        
-        else {
-            console.error(`[START ERRO] Tipo de jogo '${room.gameType}' não tem rota definida.`);
-        }
-    } catch (error) {
-        console.error(`[START CRASH] Erro fatal ao iniciar o jogo:`, error);
+        else if (room.gameType === 'WHOAMI') module.startWhoAmI(io, room, roomId);
     }
   });
 
-  // --- 3. ROTEADOR DE REINÍCIO ---
-  socket.on('restart_game', ({ roomId }) => {
-      const room = rooms.get(roomId); 
-      if(room && room.host === socket.id) {
-        const module = gameModules[room.gameType];
-        if(!module) return;
-
-        if (room.gameType === 'ITO') module.startIto(io, room, roomId);
-        else if (room.gameType === 'CHA_CAFE') module.startChaCafe(io, room, roomId);
-        else if (room.gameType === 'CODENAMES') module.startCodenames(io, room, roomId);
-        else if (room.gameType === 'STOP') module.startStop(io, room, roomId);
-        else if (room.gameType === 'TERMO') module.startTermo(io, room, roomId);
-        else if (room.gameType === 'CINEMOJI') module.startCinemoji(io, room, roomId);
-        // Novos Jogos
-        else if (room.gameType === 'DIXIT') module.startDixit(io, room, roomId);
-        else if (room.gameType === 'MEGAQUIZ') module.startMegaquiz(io, room, roomId);
-        else if (room.gameType === 'SPY') module.startSpy(io, room, roomId);
-        else if (room.gameType === 'WHOAMI') module.startWhoami(io, room, roomId);
+  // --- NOVO: VOLTAR AO LOBBY (RESET DA SALA) ---
+  socket.on('return_to_lobby', ({ roomId }) => {
+      const room = rooms.get(roomId);
+      if (room && room.host === socket.id) {
+          console.log(`[RESET] Sala ${roomId} voltando para o Lobby.`);
+          
+          room.phase = 'LOBBY';
+          room.gameData = {}; // Limpa dados do jogo anterior
+          
+          // Notifica todos para mudarem a tela
+          io.to(roomId).emit('returned_to_lobby', { 
+              phase: 'LOBBY', 
+              players: room.players 
+          });
       }
   });
 
@@ -192,33 +173,38 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('update_players', room.players);
   });
 
-  // --- DISCONNECT INTELIGENTE ---
+  // --- DISCONNECT INTELIGENTE (COM MIGRAÇÃO DE HOST) ---
   socket.on('disconnect', () => {
      rooms.forEach((room, roomId) => {
-         const player = room.players.find(p => p.id === socket.id);
+         const playerIndex = room.players.findIndex(p => p.id === socket.id);
          
-         if (player) {
+         if (playerIndex !== -1) {
+             const player = room.players[playerIndex];
              player.connected = false; 
              
+             // Remove o jogador da lista imediatamente para não travar o jogo
+             // (Em jogos como Dixit ou ITO, um jogador offline trava tudo)
+             room.players = room.players.filter(p => p.id !== socket.id);
+             io.to(roomId).emit('update_players', room.players);
+
              const socketsInRoom = io.sockets.adapter.rooms.get(roomId);
              const activeCount = socketsInRoom ? socketsInRoom.size : 0;
 
              if (activeCount === 0) {
-                 console.log(`[SALA VAZIA] Sala ${roomId} agendada para exclusão em ${ROOM_TIMEOUT_MS/1000}s`);
+                 console.log(`[SALA VAZIA] Sala ${roomId} agendada para exclusão.`);
                  scheduleRoomDestruction(roomId);
              } else {
-                 if (room.phase === 'LOBBY') {
-                     room.players = room.players.filter(p => p.id !== socket.id);
-                     io.to(roomId).emit('update_players', room.players);
+                 // --- MIGRAÇÃO DE HOST (AUTOMÁTICA) ---
+                 // Se o jogador que saiu era o Host, passa para o próximo da lista
+                 // Isso agora acontece em QUALQUER fase, não só no Lobby
+                 if (room.host === socket.id && room.players.length > 0) {
+                     const newHostId = room.players[0].id;
+                     room.host = newHostId;
+                     room.players[0].isHost = true;
                      
-                     if(room.players.length === 0) scheduleRoomDestruction(roomId);
-                     else {
-                         if(room.host === socket.id && room.players.length > 0) {
-                             room.host = room.players[0].id;
-                             room.players[0].isHost = true;
-                             io.to(roomId).emit('update_players', room.players);
-                         }
-                     }
+                     console.log(`[HOST MIGRATION] Host passou de ${socket.id} para ${newHostId}`);
+                     io.to(roomId).emit('update_players', room.players); // Atualiza lista com nova coroa
+                     io.to(newHostId).emit('msg_success', 'Você agora é o Host da sala!');
                  }
              }
          }
@@ -230,7 +216,6 @@ io.on('connection', (socket) => {
 
 function cancelRoomDestruction(roomId) {
     if (roomDestructionTimers.has(roomId)) {
-        console.log(`[RESGATADA] Sala ${roomId} teve a exclusão cancelada.`);
         clearTimeout(roomDestructionTimers.get(roomId));
         roomDestructionTimers.delete(roomId);
     }
@@ -240,7 +225,6 @@ function scheduleRoomDestruction(roomId) {
     if (roomDestructionTimers.has(roomId)) return;
     const timer = setTimeout(() => {
         if (rooms.has(roomId)) {
-            console.log(`[DESTRUINDO] Sala ${roomId} expirou por inatividade.`);
             rooms.delete(roomId);
             roomDestructionTimers.delete(roomId);
         }
@@ -284,4 +268,4 @@ function joinRoomInternal(socket, roomId, nickname, isHost) {
 }
 
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, '0.0.0.0', () => console.log(`SERVIDOR FULL (10 JOGOS) ONLINE NA PORTA ${PORT}`));
+server.listen(PORT, '0.0.0.0', () => console.log(`SERVIDOR ATUALIZADO (HOST MIGRATION) ONLINE NA PORTA ${PORT}`));
