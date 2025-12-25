@@ -12,13 +12,15 @@ import GameWhoAmI from './GameWhoAmI';
 import GameCinemoji from './GameCinemoji';   
 import GameMegaQuiz from './GameMegaQuiz';   
 import GameDixit from './GameDixit';         
+import GameEnigma from './GameEnigma'; // <--- IMPORTANTE: Jogo Novo
 
 import Chat from './Chat';
 
 // --- ÍCONES (Lucide React) ---
 import { 
   Trash2, Gamepad2, Coffee, Loader2, LogOut, Eye, Hand, LayoutGrid, 
-  VenetianMask, User, Users, Users2, Film, Brain, Palette, Undo2, AlertTriangle
+  VenetianMask, User, Users, Users2, Film, Brain, Palette, Undo2, AlertTriangle, 
+  Search // <--- IMPORTANTE: Ícone do Enigma
 } from 'lucide-react';
 
 // --- CONFIGURAÇÃO GERAL DOS JOGOS ---
@@ -26,6 +28,7 @@ const GAMES_CONFIG = [
   { id: 'TERMO', name: 'Termo', minPlayers: 1, category: 'SOLO / VERSUS (1+)', desc: 'Acerte a palavra de 5 letras.', icon: LayoutGrid, color: 'emerald', iconColor: 'bg-emerald-600' },
   { id: 'CINEMOJI', name: 'CineMoji', minPlayers: 1, category: 'SOLO / VERSUS (1+)', desc: 'Adivinhe o filme pelos emojis.', icon: Film, color: 'yellow', iconColor: 'bg-yellow-500' },
   { id: 'MEGAQUIZ', name: 'Mega Quiz', minPlayers: 1, category: 'SOLO / VERSUS (1+)', desc: 'Apostas, roubos e perguntas.', icon: Brain, color: 'blue', iconColor: 'bg-blue-600' },
+  { id: 'ENIGMA', name: 'Enigma', minPlayers: 1, category: 'SOLO / VERSUS (1+)', desc: 'Descubra a palavra com menos dicas.', icon: Search, color: 'emerald', iconColor: 'bg-emerald-600' }, // <--- CONFIG DO ENIGMA
   { id: 'STOP', name: 'Stop!', minPlayers: 2, category: 'PEQUENOS GRUPOS (2+)', desc: 'Adedonha clássica rápida.', icon: Hand, color: 'purple', iconColor: 'bg-purple-600'},
   { id: 'ITO', name: 'ITO', minPlayers: 2, category: 'PEQUENOS GRUPOS (2+)', desc: 'Sincronia e cooperação.', icon: Gamepad2, color: 'indigo', iconColor: 'bg-indigo-600'},
   { id: 'CHA_CAFE', name: 'Chá ou Café', minPlayers: 2, category: 'PEQUENOS GRUPOS (2+)', desc: 'Adivinhação por contexto.', icon: Coffee, color: 'pink', iconColor: 'bg-pink-600'},
@@ -59,12 +62,9 @@ export default function App() {
   const [gameResult, setGameResult] = useState(null);
 
   const [isJoining, setIsJoining] = useState(false);
-  
-  // NOVO: Estado para confirmação do botão de Lobby
   const [lobbyConfirm, setLobbyConfirm] = useState(false);
 
   useEffect(() => {
-    // 1. Tentar Reconectar
     const tentarReconectar = () => {
         const sRoom = localStorage.getItem('saved_roomId');
         const sNick = localStorage.getItem('saved_nickname');
@@ -83,7 +83,6 @@ export default function App() {
     const onConnect = () => tentarReconectar();
     socket.on('connect', onConnect);
     
-    // 2. Listeners de Sala
     socket.on('joined_room', (data) => { 
       handleJoinSuccess(data.roomId, data.isHost);
       setPlayers(data.players); 
@@ -115,7 +114,6 @@ export default function App() {
 
     socket.on('msg_success', (msg) => alert(msg));
     
-    // 3. Listeners de Jogo
     socket.on('game_started', (data) => { 
       setPlayers(data.players); 
       setGameType(data.gameType); 
@@ -136,10 +134,9 @@ export default function App() {
         setPlayers(data.players);
         setGameData({});
         setGameResult(null);
-        setLobbyConfirm(false); // Reseta o botão ao voltar
+        setLobbyConfirm(false);
     });
 
-    // Eventos Específicos
     socket.on('your_secret_number', (n) => setMySecret(n));
     socket.on('dixit_hand', () => {}); 
     socket.on('dixit_my_card', () => {});
@@ -185,16 +182,12 @@ export default function App() {
   const iniciar = () => socket.emit('start_game', { roomId });
   const expulsar = (targetId) => { if(confirm("Expulsar este jogador?")) socket.emit('kick_player', { roomId, targetId }); }
   
-  // --- LÓGICA DO BOTÃO DE VOLTAR AO LOBBY (Sem Pop-up) ---
   const handleLobbyClick = () => {
       if (lobbyConfirm) {
-          // Segundo clique: Executa a ação
           socket.emit('return_to_lobby', { roomId });
           setLobbyConfirm(false);
       } else {
-          // Primeiro clique: Arma o botão
           setLobbyConfirm(true);
-          // Reseta após 3 segundos se não confirmar
           setTimeout(() => setLobbyConfirm(false), 3000);
       }
   };
@@ -287,7 +280,6 @@ export default function App() {
     <>
       <div className="fixed top-4 left-4 z-50"><button onClick={sairDoJogo} className="bg-slate-800/50 hover:bg-red-600 text-white p-2 rounded-full shadow-lg transition backdrop-blur-sm"><LogOut size={20} /></button></div>
       
-      {/* --- BOTÃO DE VOLTAR AO LOBBY CORRIGIDO --- */}
       {isHost && view === 'GAME' && (
           <div className="fixed top-4 right-20 z-50">
              <button 
@@ -314,6 +306,7 @@ export default function App() {
       {gameType === 'CINEMOJI' && <GameCinemoji players={players} isHost={isHost} roomId={roomId} gameData={gameData} phase={currentPhase} />}
       {gameType === 'MEGAQUIZ' && <GameMegaQuiz players={players} isHost={isHost} roomId={roomId} gameData={gameData} phase={currentPhase} />}
       {gameType === 'DIXIT' && <GameDixit players={players} isHost={isHost} roomId={roomId} gameData={gameData} phase={currentPhase} />}
+      {gameType === 'ENIGMA' && <GameEnigma players={players} isHost={isHost} roomId={roomId} gameData={gameData} phase={currentPhase} />} {/* <--- RENDERIZAÇÃO DO ENIGMA */}
 
       <Chat roomId={roomId} nickname={nickname} />
     </>

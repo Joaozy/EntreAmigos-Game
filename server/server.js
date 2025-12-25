@@ -14,7 +14,8 @@ const gameModules = {
     'DIXIT': require('./games/game_dixit'),
     'MEGAQUIZ': require('./games/game_megaquiz'),
     'SPY': require('./games/game_spy'),
-    'WHOAMI': require('./games/game_whoami')
+    'WHOAMI': require('./games/game_whoami'),
+    'ENIGMA': require('./games/game_enigma')
 };
 
 const app = express();
@@ -142,6 +143,7 @@ io.on('connection', (socket) => {
         else if (room.gameType === 'MEGAQUIZ') module.startMegaQuiz(io, room, roomId);
         else if (room.gameType === 'SPY') module.startSpy(io, room, roomId);
         else if (room.gameType === 'WHOAMI') module.startWhoAmI(io, room, roomId);
+        else if (room.gameType === 'ENIGMA') module.startEnigma(io, room, roomId);
     } else {
         console.error(`[ERRO] Módulo não encontrado para: ${room.gameType}`);
     }
