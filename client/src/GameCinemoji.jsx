@@ -1,46 +1,66 @@
 import React, { useState, useEffect } from 'react';
 import { socket } from './socket';
-import { Film, Send, Clock, Trophy, Lightbulb, Loader2 } from 'lucide-react';
+import { Film, Send, Clock, Trophy, Lightbulb, Loader2, AlertTriangle } from 'lucide-react';
 
 export default function GameCinemoji({ players, isHost, roomId, gameData, phase }) {
   const [guess, setGuess] = useState('');
   const [timer, setTimer] = useState(60);
   const [hint, setHint] = useState(null);
-  const [shake, setShake] = useState(false);
+  
+  // Estados de Feedback Visual
+  const [shake, setShake] = useState(false); 
+  const [closeShake, setCloseShake] = useState(false); 
+  const [feedbackMsg, setFeedbackMsg] = useState('');
 
+  // 1. MONITOR DE MUDANÇA DE RODADA (RESET FORÇADO)
+  // Toda vez que gameData.round mudar, limpamos a dica e os feedbacks
+  useEffect(() => {
+      setHint(null);
+      setFeedbackMsg('');
+      setShake(false);
+      setCloseShake(false);
+      setGuess('');
+      // Se a rodada mudou, o timer reseta visualmente para 60 até o servidor atualizar
+      setTimer(60); 
+  }, [gameData?.round]); 
+
+  // 2. LISTENERS DO SOCKET
   useEffect(() => {
     const handleTimer = (t) => setTimer(t);
-    // Recebe o evento específico de dica (aos 30s)
     const handleHint = (h) => setHint(h);
     
     const handleWrong = () => {
         setShake(true);
+        setFeedbackMsg('');
         setTimeout(() => setShake(false), 500);
     };
 
+    const handleClose = (msg) => {
+        setCloseShake(true);
+        setFeedbackMsg(msg);
+        setTimeout(() => {
+            setCloseShake(false);
+            setFeedbackMsg('');
+        }, 2000);
+    };
+
     socket.on('cinemoji_timer', handleTimer);
-    socket.on('cinemoji_hint', handleHint);
+    socket.on('cinemoji_hint', handleHint); // Recebe a dica dos 30s
     socket.on('cinemoji_wrong', handleWrong);
+    socket.on('cinemoji_close', handleClose);
 
-    // --- CORREÇÃO AQUI ---
-    // Sincroniza o estado local 'hint' com o 'gameData' vindo do servidor.
-    // Se gameData.hint for null (nova rodada), setHint vira null (limpa a dica).
-    // Se gameData.hint tiver texto (reconectou ou 30s passados), atualiza.
-    if (gameData) {
-        setHint(gameData.hint || null);
-    }
-
-    // Força limpeza ao entrar na fase de revelação
-    if (phase === 'REVEAL') {
-        setHint(null);
+    // Sincronia inicial/reconect (Se já tiver dica no servidor, mostra)
+    if (gameData?.hint) {
+        setHint(gameData.hint);
     }
 
     return () => {
         socket.off('cinemoji_timer', handleTimer);
         socket.off('cinemoji_hint', handleHint);
         socket.off('cinemoji_wrong', handleWrong);
+        socket.off('cinemoji_close', handleClose);
     };
-  }, [phase, gameData, roomId]); // Dependências cruciais atualizadas
+  }, []); // Dependências vazias aqui pois controlamos o reset no useEffect acima
 
   const sendGuess = (e) => {
       e.preventDefault();
@@ -50,7 +70,6 @@ export default function GameCinemoji({ players, isHost, roomId, gameData, phase 
       }
   };
 
-  // Proteção contra carregamento
   if (!gameData || (!gameData.emojis && !gameData.round)) {
       return (
           <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white gap-4">
@@ -95,7 +114,7 @@ export default function GameCinemoji({ players, isHost, roomId, gameData, phase 
                     {gameData.emojis || "..."}
                 </div>
                 
-                {/* DICA */}
+                {/* DICA: Só mostra se hint existir E não for fase de revelação */}
                 {hint && phase !== 'REVEAL' && (
                     <div className="mt-4 bg-slate-100 p-3 rounded-xl animate-in slide-in-from-bottom">
                         <div className="flex justify-center items-center gap-2 text-yellow-600 font-bold text-xs uppercase mb-1">
@@ -127,18 +146,32 @@ export default function GameCinemoji({ players, isHost, roomId, gameData, phase 
 
             {/* INPUT DE RESPOSTA */}
             {phase === 'GUESSING' && (
-                <form onSubmit={sendGuess} className={`w-full flex gap-2 transition-transform ${shake ? 'animate-shake' : ''}`}>
-                    <input 
-                        className={`flex-1 bg-slate-800 border-2 rounded-xl px-4 py-4 text-lg outline-none transition text-white placeholder:text-slate-500
-                        ${shake ? 'border-red-500 text-red-200' : 'border-slate-700 focus:border-yellow-400'}`}
-                        placeholder={shake ? "Errado! Tente de novo..." : "Qual é o nome do filme?"}
-                        value={guess} 
-                        onChange={e => { setGuess(e.target.value); if(shake) setShake(false); }} 
-                        autoFocus
-                    />
-                    <button className="bg-yellow-500 hover:bg-yellow-400 text-slate-900 px-6 rounded-xl font-black transition transform hover:scale-105">
-                        <Send />
-                    </button>
+                <form onSubmit={sendGuess} className={`w-full relative transition-transform ${shake ? 'animate-shake' : ''} ${closeShake ? 'animate-pulse' : ''}`}>
+                    
+                    {/* BALÃO DE ALERTA "QUASE LÁ" */}
+                    {feedbackMsg && (
+                        <div className="absolute -top-12 left-0 w-full flex justify-center animate-in slide-in-from-bottom-2 fade-in">
+                            <div className="bg-orange-500 text-white px-4 py-2 rounded-full font-bold text-sm shadow-lg flex items-center gap-2">
+                                <AlertTriangle size={16}/> {feedbackMsg}
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="flex gap-2">
+                        <input 
+                            className={`flex-1 bg-slate-800 border-2 rounded-xl px-4 py-4 text-lg outline-none transition text-white placeholder:text-slate-500
+                            ${shake ? 'border-red-500 text-red-200' : ''}
+                            ${closeShake ? 'border-orange-500 text-orange-200' : ''}
+                            ${!shake && !closeShake ? 'border-slate-700 focus:border-yellow-400' : ''}`}
+                            placeholder={shake ? "Errado..." : (closeShake ? "Quase lá..." : "Qual é o nome do filme?")}
+                            value={guess} 
+                            onChange={e => { setGuess(e.target.value); if(shake) setShake(false); }} 
+                            autoFocus
+                        />
+                        <button className="bg-yellow-500 hover:bg-yellow-400 text-slate-900 px-6 rounded-xl font-black transition transform hover:scale-105">
+                            <Send />
+                        </button>
+                    </div>
                 </form>
             )}
         </div>

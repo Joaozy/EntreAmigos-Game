@@ -18,7 +18,7 @@ import Chat from './Chat';
 // --- ÍCONES (Lucide React) ---
 import { 
   Trash2, Gamepad2, Coffee, Loader2, LogOut, Eye, Hand, LayoutGrid, 
-  VenetianMask, User, Users, Users2, Film, Brain, Palette, Undo2
+  VenetianMask, User, Users, Users2, Film, Brain, Palette, Undo2, AlertTriangle
 } from 'lucide-react';
 
 // --- CONFIGURAÇÃO GERAL DOS JOGOS ---
@@ -59,8 +59,10 @@ export default function App() {
   const [gameResult, setGameResult] = useState(null);
 
   const [isJoining, setIsJoining] = useState(false);
+  
+  // NOVO: Estado para confirmação do botão de Lobby
+  const [lobbyConfirm, setLobbyConfirm] = useState(false);
 
-  // --- CORREÇÃO AQUI: Dependência vazia [] para não reiniciar conexão ao mudar Host ---
   useEffect(() => {
     // 1. Tentar Reconectar
     const tentarReconectar = () => {
@@ -99,17 +101,12 @@ export default function App() {
 
     socket.on('room_created', (id) => handleJoinSuccess(id, true));
     
-    // --- CORREÇÃO DO ATUALIZAR PLAYERS ---
-    // Usamos 'setIsHost(prev => ...)' para não depender do valor antigo no closure
     socket.on('update_players', (p) => {
         setPlayers(p);
-        
         const myId = socket.id;
         const me = p.find(player => player.id === myId);
-        
         if (me) {
             setIsHost(prevIsHost => {
-                // Só atualiza se mudou de verdade
                 if (prevIsHost !== me.isHost) return me.isHost;
                 return prevIsHost;
             });
@@ -139,6 +136,7 @@ export default function App() {
         setPlayers(data.players);
         setGameData({});
         setGameResult(null);
+        setLobbyConfirm(false); // Reseta o botão ao voltar
     });
 
     // Eventos Específicos
@@ -170,14 +168,12 @@ export default function App() {
         setIsJoining(false);
     });
 
-    // Cleanup: Remove listeners mas NÃO desconecta o socket a menos que o componente desmonte de verdade
     return () => { 
         socket.off('connect', onConnect); 
-        socket.off('update_players'); // Importante remover listeners específicos
+        socket.off('update_players');
         socket.off('joined_room');
-        // socket.disconnect(); <--- REMOVIDO PARA EVITAR QUEDA AO ATUALIZAR ESTADO
     };
-  }, []); // <--- IMPORTANTE: ARRAY VAZIO
+  }, []);
 
   const limparDadosLocais = () => { localStorage.removeItem('saved_roomId'); localStorage.removeItem('saved_nickname'); };
   const sairDoJogo = () => { limparDadosLocais(); setRoomId(''); setPlayers([]); setIsHost(false); setView('HOME'); setIsJoining(false); socket.disconnect(); window.location.href = "/"; };
@@ -189,8 +185,19 @@ export default function App() {
   const iniciar = () => socket.emit('start_game', { roomId });
   const expulsar = (targetId) => { if(confirm("Expulsar este jogador?")) socket.emit('kick_player', { roomId, targetId }); }
   
-  // Botão de Voltar ao Lobby
-  const voltarLobby = () => { if(confirm("Tem certeza? O jogo atual será encerrado e todos voltarão ao Lobby.")) socket.emit('return_to_lobby', { roomId }); }
+  // --- LÓGICA DO BOTÃO DE VOLTAR AO LOBBY (Sem Pop-up) ---
+  const handleLobbyClick = () => {
+      if (lobbyConfirm) {
+          // Segundo clique: Executa a ação
+          socket.emit('return_to_lobby', { roomId });
+          setLobbyConfirm(false);
+      } else {
+          // Primeiro clique: Arma o botão
+          setLobbyConfirm(true);
+          // Reseta após 3 segundos se não confirmar
+          setTimeout(() => setLobbyConfirm(false), 3000);
+      }
+  };
 
   const selectedGameObj = GAMES_CONFIG.find(g => g.id === selectedGame) || GAMES_CONFIG[0];
   const activeGameId = gameType || 'ITO'; 
@@ -280,13 +287,19 @@ export default function App() {
     <>
       <div className="fixed top-4 left-4 z-50"><button onClick={sairDoJogo} className="bg-slate-800/50 hover:bg-red-600 text-white p-2 rounded-full shadow-lg transition backdrop-blur-sm"><LogOut size={20} /></button></div>
       
+      {/* --- BOTÃO DE VOLTAR AO LOBBY CORRIGIDO --- */}
       {isHost && view === 'GAME' && (
           <div className="fixed top-4 right-20 z-50">
              <button 
-                onClick={voltarLobby} 
-                className="bg-indigo-600/90 hover:bg-indigo-500 text-white px-4 py-2 rounded-full shadow-lg transition backdrop-blur-sm flex items-center gap-2 font-bold text-xs"
+                onClick={handleLobbyClick} 
+                className={`px-4 py-2 rounded-full shadow-lg transition-all backdrop-blur-sm flex items-center gap-2 font-bold text-xs ${
+                    lobbyConfirm 
+                    ? 'bg-red-600 hover:bg-red-500 text-white animate-pulse' 
+                    : 'bg-indigo-600/90 hover:bg-indigo-500 text-white'
+                }`}
              >
-                <Undo2 size={16} /> LOBBY
+                {lobbyConfirm ? <AlertTriangle size={16} /> : <Undo2 size={16} />} 
+                {lobbyConfirm ? "CONFIRMAR?" : "LOBBY"}
              </button>
           </div>
       )}
