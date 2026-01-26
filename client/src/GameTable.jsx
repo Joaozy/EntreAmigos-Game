@@ -4,8 +4,7 @@ import { arrayMove, SortableContext, verticalListSortingStrategy, useSortable } 
 import { CSS } from '@dnd-kit/utilities';
 import { socket } from './socket';
 
-// --- COMPONENTES AUXILIARES ---
-
+// Componentes Visuais (Cards)
 function SecretCard({ number }) {
   const [isFlipped, setIsFlipped] = useState(false);
   return (
@@ -25,13 +24,7 @@ function SecretCard({ number }) {
 
 function SortableItem({ id, player, phase }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
-  
-  const style = { 
-    transform: CSS.Transform.toString(transform), 
-    transition, 
-    zIndex: isDragging ? 50 : 'auto', 
-    touchAction: 'none' 
-  };
+  const style = { transform: CSS.Transform.toString(transform), transition, zIndex: isDragging ? 50 : 'auto', touchAction: 'none' };
   
   let statusColor = "border-transparent";
   if (phase === 'REVEAL' && player.isCorrect !== undefined) {
@@ -59,7 +52,7 @@ function SortableItem({ id, player, phase }) {
   );
 }
 
-// --- MESA PRINCIPAL ---
+// MESA PRINCIPAL
 export default function GameTable({ players, isHost, mySecretNumber, roomId, theme, phase, gameResult }) {
   const [items, setItems] = useState(players);
   const [myClueInput, setMyClueInput] = useState('');
@@ -67,13 +60,18 @@ export default function GameTable({ players, isHost, mySecretNumber, roomId, the
   
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(TouchSensor));
 
-  useEffect(() => { setItems(players); }, [players]);
+  // Sincroniza estado local com props do servidor
   useEffect(() => { 
-    if (phase === 'CLUE_PHASE') {
-      setSubmitted(false); 
-      setMyClueInput('');
-    }
-  }, [phase]);
+      setItems(players);
+      // Se reconectar e já tiver enviado, atualiza o estado visual
+      const me = players.find(p => p.id === socket.id);
+      if (me && me.hasSubmitted) {
+          setSubmitted(true);
+      } else if (phase === 'CLUE_PHASE') {
+          // Se estamos na fase de dicas e eu NÃO enviei, garanto que o input apareça
+          setSubmitted(false);
+      }
+  }, [players, phase]);
 
   function handleDragEnd(event) {
     if (phase === 'REVEAL') return; 
@@ -89,8 +87,7 @@ export default function GameTable({ players, isHost, mySecretNumber, roomId, the
 
   return (
     <div className="min-h-screen bg-slate-900 pb-20 font-sans text-slate-800 overflow-hidden relative">
-      
-      {/* 1. HEADER DO TEMA */}
+      {/* HEADER */}
       <div className="bg-slate-800 p-4 pt-6 rounded-b-3xl shadow-lg border-b border-slate-700 mb-6">
         <div className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-1 text-center">Tema</div>
         <h1 className="text-xl md:text-2xl font-black text-white leading-tight mb-3 text-center">
@@ -102,12 +99,12 @@ export default function GameTable({ players, isHost, mySecretNumber, roomId, the
         </div>
       </div>
 
-      {/* 2. ÁREA DA CARTA SECRETA */}
+      {/* CARTA SECRETA */}
       <div className="flex justify-center mb-6 relative z-10">
         <SecretCard number={mySecretNumber || "?"} />
       </div>
 
-      {/* 3. INPUT DICAS */}
+      {/* ÁREA DE INPUT (DICA) */}
       {phase === 'CLUE_PHASE' && (
         <div className="px-4 max-w-md mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
           {!submitted ? (
@@ -141,11 +138,9 @@ export default function GameTable({ players, isHost, mySecretNumber, roomId, the
         </div>
       )}
 
-      {/* 4. ÁREA DE ORDENAÇÃO (COM ESCALA VISUAL) */}
+      {/* LISTA ORDENÁVEL */}
       {(phase === 'ORDERING' || phase === 'REVEAL') && (
         <div className="px-4 max-w-md mx-auto pb-32 flex gap-3 items-stretch">
-          
-          {/* NOVA ESCALA VISUAL (Solução Visual) */}
           <div className="w-8 flex flex-col justify-between items-center py-4 bg-slate-800/50 rounded-full border border-slate-700">
             <div className="text-xs font-bold text-red-400 rotate-180" style={{writingMode: 'vertical-rl'}}>MENOR (1)</div>
             <div className="flex-1 w-1 bg-gradient-to-b from-red-500 via-yellow-500 to-green-500 my-2 rounded-full opacity-50"></div>
@@ -173,7 +168,7 @@ export default function GameTable({ players, isHost, mySecretNumber, roomId, the
         </div>
       )}
 
-      {/* 5. MODAL RESULTADO */}
+      {/* MODAL RESULTADO */}
       {phase === 'REVEAL' && gameResult && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-300">
           <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl text-center relative overflow-hidden">
@@ -183,7 +178,6 @@ export default function GameTable({ players, isHost, mySecretNumber, roomId, the
             <p className="text-slate-600 font-medium mb-8">Cartas colocadas na ordem correta.</p>
             {isHost ? (
               <button 
-                /* CORREÇÃO: Chama reinício imediato do ITO */
                 onClick={() => socket.emit('ito_restart', { roomId })}
                 className="w-full bg-indigo-600 text-white font-bold py-4 rounded-xl shadow-lg hover:bg-indigo-700 transition"
               >
@@ -195,13 +189,7 @@ export default function GameTable({ players, isHost, mySecretNumber, roomId, the
           </div>
         </div>
       )}
-
-      <style>{`
-        .perspective-1000 { perspective: 1000px; }
-        .transform-style-3d { transform-style: preserve-3d; }
-        .backface-hidden { backface-visibility: hidden; }
-        .rotate-y-180 { transform: rotateY(180deg); }
-      `}</style>
+       <style>{`.perspective-1000 { perspective: 1000px; } .transform-style-3d { transform-style: preserve-3d; } .backface-hidden { backface-visibility: hidden; } .rotate-y-180 { transform: rotateY(180deg); }`}</style>
     </div>
   );
 }

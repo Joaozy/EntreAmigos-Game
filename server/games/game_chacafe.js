@@ -1,149 +1,117 @@
 const { shuffle } = require('../utils/helpers');
 
-// --- DADOS DO JOGO (HARDCODED PARA EVITAR BUGS) ---
-const THEMES_DATA = [
-    "Uma viagem inesquecível",
-    "Um sonho muito estranho",
-    "Uma comida que eu odeio",
-    "Um mico que já paguei",
-    "Se eu ganhasse na loteria...",
-    "Um superpoder inútil",
-    "O melhor dia da minha vida",
-    "Uma fobia bizarra"
+// Pares de oposição para o jogo
+const PAIRS = [
+    ["Chá", "Café"]
 ];
 
 const startChaCafe = (io, room, roomId) => {
-    // Define narrador (Host começa)
-    const narrator = room.players[0]; 
+    // 1. Sorteia um par
+    const pair = PAIRS[Math.floor(Math.random() * PAIRS.length)];
     
-    // Embaralha temas para oferecer opções
-    const availableThemes = shuffle([...THEMES_DATA]).slice(0, 3);
-
+    // 2. Define Narrador e Desafiante (Turnos)
+    const narrator = room.players[0]; // Host começa
+    const guesser = room.players[1] || room.players[0]; // Se tiver só 1 (teste), ele joga contra si mesmo
+    
     room.gameData = {
-        round: 1,
+        options: pair,           // ["Chá", "Café"]
+        selectedOption: null,    // Narrador vai escolher (0 ou 1)
         narratorId: narrator.id,
-        currentTheme: null, 
-        themeOptions: availableThemes, // Envia opções para o narrador escolher
-        answers: {},
-        votes: {},
-        phase: 'THEME_SELECTION'
+        guesserId: guesser.id,
+        round: 1,
+        guesserWord: null,
+        phase: 'SELECTION'       // SELECTION -> GUESSING -> RESULT
     };
     
     room.phase = 'GAME';
     
-    // Envia o estado inicial para todos
     io.to(roomId).emit('game_started', {
         gameType: 'CHA_CAFE',
-        phase: 'THEME_SELECTION',
+        phase: 'SELECTION',
         gameData: getPublicData(room),
         players: room.players
     });
-
-    console.log(`[CHA_CAFE] Iniciado na sala ${roomId}. Narrador: ${narrator.nickname}`);
 };
 
 const getPublicData = (room) => {
     const gd = room.gameData;
     if (!gd) return {};
+
+    // Esconde a escolha do narrador
     return {
-        round: gd.round,
+        options: gd.options,
+        // Só envia qual foi escolhida se já acabou a rodada
+        selectedOption: (gd.phase === 'RESULT') ? gd.selectedOption : null,
         narratorId: gd.narratorId,
-        currentTheme: gd.currentTheme,
-        themeOptions: gd.themeOptions, // Importante enviar isso
+        guesserId: gd.guesserId,
+        guesserWord: gd.guesserWord,
         phase: gd.phase,
-        answersCount: Object.keys(gd.answers || {}).length,
-        answers: (gd.phase === 'VOTING' || gd.phase === 'RESULT') ? gd.answers : {} 
+        round: gd.round
     };
 };
 
 const registerChaCafeHandlers = (io, socket, rooms) => {
-    // Seleção do Tema
-    socket.on('chacafe_select_theme', ({ roomId, theme }) => {
+    // 1. Narrador escolhe a opção (0 ou 1)
+    socket.on('cc_select_option', ({ roomId, optionIndex }) => {
         const room = rooms.get(roomId);
-        // Verifica se é o narrador
         if (!room || room.gameData.narratorId !== socket.id) return;
         
-        console.log(`[CHA_CAFE] Tema escolhido: ${theme}`);
-        room.gameData.currentTheme = theme;
-        room.gameData.phase = 'WRITING';
-        room.gameData.answers = {};
+        room.gameData.selectedOption = optionIndex;
+        room.gameData.phase = 'GUESSING';
         
-        io.to(roomId).emit('update_game_data', { gameData: getPublicData(room), phase: 'WRITING' });
+        io.to(roomId).emit('update_game_data', { 
+            gameData: getPublicData(room), 
+            phase: 'GUESSING' 
+        });
     });
 
-    // Envio de Resposta
-    socket.on('chacafe_submit', ({ roomId, text }) => {
+    // 2. Desafiante envia palavra
+    socket.on('cc_submit_guess', ({ roomId, word }) => {
         const room = rooms.get(roomId);
-        if (!room || room.gameData.phase !== 'WRITING') return;
+        if (!room || room.gameData.guesserId !== socket.id) return;
         
-        const gd = room.gameData;
-        gd.answers[socket.id] = text;
+        room.gameData.guesserWord = word;
+        room.gameData.phase = 'RESULT';
         
-        // Verifica se todos (menos narrador se ele não jogar) responderam. 
-        // Lógica atual: Todos escrevem.
-        if (Object.keys(gd.answers).length >= room.players.length) {
-            gd.phase = 'VOTING'; // Vai para leitura/votação
-            io.to(roomId).emit('update_game_data', { 
-                gameData: getPublicData(room), 
-                phase: 'VOTING' 
-            });
-        } else {
-            // Apenas atualiza o contador de respostas
-            io.to(roomId).emit('update_game_data', { gameData: getPublicData(room), phase: 'WRITING' });
-        }
-    });
-
-    // Votação (Próxima fase seria escolher a melhor)
-    socket.on('chacafe_vote', ({ roomId, targetId }) => {
-        const room = rooms.get(roomId);
-        if (!room || room.gameData.phase !== 'VOTING') return;
+        // Aqui o jogo poderia ter um julgamento, mas para simplificar:
+        // Mostra o resultado e o narrador diz se acertou ou não verbalmente/chat,
+        // ou reinicia a rodada.
         
-        // Implementar lógica de pontuação aqui se quiser
-        // Por enquanto, vamos só ir para RESULT quando o narrador decidir
+        io.to(roomId).emit('update_game_data', { 
+            gameData: getPublicData(room), 
+            phase: 'RESULT' 
+        });
     });
     
-    // Narrador encerra rodada
-    socket.on('chacafe_end_round', ({ roomId, winnerId }) => {
+    // 3. Próxima rodada
+    socket.on('cc_next_round', ({ roomId }) => {
          const room = rooms.get(roomId);
-         if (!room || room.gameData.narratorId !== socket.id) return;
-         
-         // Dá pontos pro vencedor
-         const winner = room.players.find(p => p.id === winnerId);
-         if(winner) winner.score += 1;
+         if (!room || room.gameData.narratorId !== socket.id) return; // Narrador controla
 
-         // Passa narrador
-         const currentIdx = room.players.findIndex(p => p.id === socket.id);
-         const nextIdx = (currentIdx + 1) % room.players.length;
-         const nextNarrator = room.players[nextIdx];
+         // Troca papéis
+         const currentNarratorIdx = room.players.findIndex(p => p.id === room.gameData.narratorId);
+         const nextNarratorIdx = (currentNarratorIdx + 1) % room.players.length;
+         const nextGuesserIdx = (nextNarratorIdx + 1) % room.players.length;
 
-         room.gameData.narratorId = nextNarrator.id;
+         room.gameData.narratorId = room.players[nextNarratorIdx].id;
+         room.gameData.guesserId = room.players[nextGuesserIdx].id;
+         room.gameData.options = PAIRS[Math.floor(Math.random() * PAIRS.length)];
+         room.gameData.selectedOption = null;
+         room.gameData.guesserWord = null;
+         room.gameData.phase = 'SELECTION';
          room.gameData.round++;
-         room.gameData.phase = 'THEME_SELECTION';
-         room.gameData.themeOptions = shuffle([...THEMES_DATA]).slice(0, 3);
-         room.gameData.currentTheme = null;
-         room.gameData.answers = {};
-         
-         io.to(roomId).emit('update_game_data', { gameData: getPublicData(room), phase: 'THEME_SELECTION' });
-         io.to(roomId).emit('update_players', room.players);
+
+         io.to(roomId).emit('update_game_data', { gameData: getPublicData(room), phase: 'SELECTION' });
     });
 };
 
 const handleRejoin = (io, socket, room, oldId, newId) => {
     let updated = false;
     const gd = room.gameData;
-    
     if (!gd) return false;
 
-    if (gd.narratorId === oldId) {
-        gd.narratorId = newId;
-        updated = true;
-    }
-
-    if (gd.answers && gd.answers[oldId]) {
-        gd.answers[newId] = gd.answers[oldId];
-        delete gd.answers[oldId];
-        updated = true;
-    }
+    if (gd.narratorId === oldId) { gd.narratorId = newId; updated = true; }
+    if (gd.guesserId === oldId) { gd.guesserId = newId; updated = true; }
 
     return updated;
 };
