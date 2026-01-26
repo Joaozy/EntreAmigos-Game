@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { useGame } from '../context/GameContext';
 
-// ... (Lista de GAMES igual ao anterior) ...
 const GAMES = [
     { id: 'ITO', name: 'ITO', icon: '🌊', color: 'bg-blue-500' },
     { id: 'CHA_CAFE', name: 'Chá ou Café', icon: '☕', color: 'bg-orange-500' },
@@ -10,7 +9,7 @@ const GAMES = [
 ];
 
 export default function Lobby() {
-  const { criarSala, entrarSala, nickname, setRoomId, roomId, setSelectedGame, selectedGame, myStats } = useGame();
+  const { criarSala, entrarSala, nickname, setRoomId, roomId, setSelectedGame, selectedGame, myStats, logout } = useGame(); // <--- Adicionado logout
   const [mode, setMode] = useState('MENU'); 
 
   return (
@@ -22,14 +21,13 @@ export default function Lobby() {
                   {nickname ? nickname[0].toUpperCase() : '?'}
               </div>
               <div className="text-left">
-                  <p className="text-white font-bold leading-tight text-lg">{nickname}</p>
+                  <p className="text-white font-bold leading-tight text-lg">{nickname || "Visitante"}</p>
                   <p className="text-xs text-green-400 font-bold">● Online</p>
               </div>
           </div>
-          <div className="text-right bg-slate-900 p-2 rounded-lg">
-              <p className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Vitórias</p>
-              <p className="text-xl text-yellow-400 font-black">{myStats?.wins || 0}</p>
-          </div>
+          <button onClick={logout} className="text-xs bg-red-900/50 text-red-300 px-3 py-1 rounded-lg hover:bg-red-900 transition font-bold">
+              SAIR 🚪
+          </button>
       </div>
 
       {/* MENU PRINCIPAL */}
