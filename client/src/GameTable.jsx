@@ -3,8 +3,9 @@ import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, TouchS
 import { arrayMove, SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { socket } from './socket';
+import { useGame } from './context/GameContext'; // IMPORTANTE
 
-// Componentes Visuais (Cards)
+// Componentes Cards (Manter igual)
 function SecretCard({ number }) {
   const [isFlipped, setIsFlipped] = useState(false);
   return (
@@ -22,7 +23,7 @@ function SecretCard({ number }) {
   );
 }
 
-function SortableItem({ id, player, phase }) {
+function SortableItem({ id, player, phase, myUserId }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
   const style = { transform: CSS.Transform.toString(transform), transition, zIndex: isDragging ? 50 : 'auto', touchAction: 'none' };
   
@@ -32,10 +33,12 @@ function SortableItem({ id, player, phase }) {
   } else if (isDragging) {
     statusColor = "border-indigo-500 shadow-xl scale-105 z-50";
   }
+  
+  const isMe = player.userId === myUserId; // Destaque visual para mim
 
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners} 
-      className={`relative p-3 mb-2 rounded-xl border-2 bg-white flex items-center gap-3 transition-all ${statusColor} shadow-sm`}>
+      className={`relative p-3 mb-2 rounded-xl border-2 bg-white flex items-center gap-3 transition-all ${statusColor} shadow-sm ${isMe ? 'ring-2 ring-indigo-300' : ''}`}>
       <div className="w-8 h-8 bg-slate-200 text-slate-600 rounded-full flex items-center justify-center font-bold text-sm shrink-0">
         {player.nickname[0].toUpperCase()}
       </div>
@@ -52,26 +55,24 @@ function SortableItem({ id, player, phase }) {
   );
 }
 
-// MESA PRINCIPAL
 export default function GameTable({ players, isHost, mySecretNumber, roomId, theme, phase, gameResult }) {
+  const { myUserId } = useGame();
   const [items, setItems] = useState(players);
   const [myClueInput, setMyClueInput] = useState('');
   const [submitted, setSubmitted] = useState(false);
   
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(TouchSensor));
 
-  // Sincroniza estado local com props do servidor
   useEffect(() => { 
       setItems(players);
-      // Se reconectar e já tiver enviado, atualiza o estado visual
-      const me = players.find(p => p.id === socket.id);
+      // Verifica estado de envio baseado no ID FIXO
+      const me = players.find(p => p.userId === myUserId);
       if (me && me.hasSubmitted) {
           setSubmitted(true);
       } else if (phase === 'CLUE_PHASE') {
-          // Se estamos na fase de dicas e eu NÃO enviei, garanto que o input apareça
           setSubmitted(false);
       }
-  }, [players, phase]);
+  }, [players, phase, myUserId]);
 
   function handleDragEnd(event) {
     if (phase === 'REVEAL') return; 
@@ -81,13 +82,13 @@ export default function GameTable({ players, isHost, mySecretNumber, roomId, the
       const newIndex = items.findIndex((i) => i.id === over.id);
       const newOrder = arrayMove(items, oldIndex, newIndex);
       setItems(newOrder);
-      socket.emit('update_order', { roomId, newOrderIds: newOrder.map(p => p.id) });
+      // Envia a nova ordem dos IDs FIXOS (userId) para o servidor saber quem é quem
+      socket.emit('update_order', { roomId, newOrderIds: newOrder.map(p => p.userId) });
     }
   }
 
   return (
     <div className="min-h-screen bg-slate-900 pb-20 font-sans text-slate-800 overflow-hidden relative">
-      {/* HEADER */}
       <div className="bg-slate-800 p-4 pt-6 rounded-b-3xl shadow-lg border-b border-slate-700 mb-6">
         <div className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-1 text-center">Tema</div>
         <h1 className="text-xl md:text-2xl font-black text-white leading-tight mb-3 text-center">
@@ -99,12 +100,10 @@ export default function GameTable({ players, isHost, mySecretNumber, roomId, the
         </div>
       </div>
 
-      {/* CARTA SECRETA */}
       <div className="flex justify-center mb-6 relative z-10">
         <SecretCard number={mySecretNumber || "?"} />
       </div>
 
-      {/* ÁREA DE INPUT (DICA) */}
       {phase === 'CLUE_PHASE' && (
         <div className="px-4 max-w-md mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
           {!submitted ? (
@@ -130,7 +129,7 @@ export default function GameTable({ players, isHost, mySecretNumber, roomId, the
               <p className="text-indigo-300 font-bold mb-3 text-sm">Aguardando amigos...</p>
               <div className="flex flex-wrap justify-center gap-2">
                 {players.map(p => (
-                  <div key={p.id} className={`w-2 h-2 rounded-full transition-all ${p.hasSubmitted ? 'bg-green-500 scale-125 shadow-[0_0_8px_#22c55e]' : 'bg-slate-600'}`} />
+                  <div key={p.userId} className={`w-2 h-2 rounded-full transition-all ${p.hasSubmitted ? 'bg-green-500 scale-125 shadow-[0_0_8px_#22c55e]' : 'bg-slate-600'}`} />
                 ))}
               </div>
             </div>
@@ -138,7 +137,6 @@ export default function GameTable({ players, isHost, mySecretNumber, roomId, the
         </div>
       )}
 
-      {/* LISTA ORDENÁVEL */}
       {(phase === 'ORDERING' || phase === 'REVEAL') && (
         <div className="px-4 max-w-md mx-auto pb-32 flex gap-3 items-stretch">
           <div className="w-8 flex flex-col justify-between items-center py-4 bg-slate-800/50 rounded-full border border-slate-700">
@@ -150,7 +148,7 @@ export default function GameTable({ players, isHost, mySecretNumber, roomId, the
           <div className="flex-1">
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
               <SortableContext items={items} strategy={verticalListSortingStrategy}>
-                {items.map((p) => <SortableItem key={p.id} id={p.id} player={p} phase={phase} />)}
+                {items.map((p) => <SortableItem key={p.id} id={p.id} player={p} phase={phase} myUserId={myUserId} />)}
               </SortableContext>
             </DndContext>
           </div>
@@ -168,7 +166,6 @@ export default function GameTable({ players, isHost, mySecretNumber, roomId, the
         </div>
       )}
 
-      {/* MODAL RESULTADO */}
       {phase === 'REVEAL' && gameResult && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-300">
           <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl text-center relative overflow-hidden">

@@ -1,77 +1,95 @@
 const { generateDeck } = require('../utils/helpers');
 
-let THEMES_ITO = [];
-try { THEMES_ITO = require('../data/themes.json'); } catch (e) { THEMES_ITO = [{ title: "Tema Livre", min: "-", max: "+" }]; }
+// Temas de segurança
+const THEMES = [
+    { title: "Popularidade", min: "Baixa", max: "Alta" },
+    { title: "Tamanho", min: "Pequeno", max: "Grande" },
+    { title: "Utilidade", min: "Inútil", max: "Útil" },
+    { title: "Perigo", min: "Seguro", max: "Mortal" }
+];
 
 const startIto = (io, room, roomId) => {
-    const deck = generateDeck(); 
-    const theme = (THEMES_ITO && THEMES_ITO.length > 0) ? THEMES_ITO[Math.floor(Math.random() * THEMES_ITO.length)] : { title: "Livre", min: "Min", max: "Max" };
+    const deck = generateDeck();
+    const theme = THEMES[Math.floor(Math.random() * THEMES.length)];
 
-    room.gameData = { theme }; 
-    room.phase = 'GAME'; 
-    
-    room.players.forEach(p => { 
-        p.secretNumber = deck.pop(); 
-        p.clue = ''; 
+    room.gameData = { theme };
+    room.phase = 'GAME';
+
+    room.players.forEach(p => {
+        p.secretNumber = deck.pop();
+        p.clue = '';
         p.hasSubmitted = false;
         delete p.isCorrect;
     });
-    
-    io.to(roomId).emit('game_started', { 
-        gameType: 'ITO', phase: 'CLUE_PHASE', 
-        gameData: room.gameData, players: room.players 
+
+    io.to(roomId).emit('game_started', {
+        gameType: 'ITO',
+        phase: 'CLUE_PHASE',
+        gameData: room.gameData,
+        players: room.players
     });
-    
-    room.players.forEach(p => io.to(p.id).emit('your_secret_number', p.secretNumber));
+
+    // Envia segredo individualmente
+    room.players.forEach(p => {
+        io.to(p.socketId).emit('your_secret_number', p.secretNumber);
+    });
 };
 
-const registerItoHandlers = (io, socket, rooms) => {
+const registerHandlers = (io, socket, rooms) => {
     socket.on('submit_clue', ({ roomId, clue }) => {
-        const room = rooms.get(roomId); if(!room) return;
-        const p = room.players.find(x => x.id === socket.id);
-        if(p) { 
-            p.clue = clue; p.hasSubmitted = true;
-            if(room.players.every(x => x.hasSubmitted)) {
+        const room = rooms.get(roomId);
+        if (!room) return;
+        const player = room.players.find(p => p.socketId === socket.id);
+
+        if (player) {
+            player.clue = clue;
+            player.hasSubmitted = true;
+
+            // Verifica se todos enviaram
+            if (room.players.every(p => p.hasSubmitted)) {
                 io.to(roomId).emit('phase_change', { phase: 'ORDERING', players: room.players });
             } else {
-                io.to(roomId).emit('player_submitted', { playerId: socket.id });
+                io.to(roomId).emit('player_submitted', { playerId: player.userId }); // Usa userId pra front saber quem foi
+                io.to(roomId).emit('update_players', room.players);
             }
         }
     });
 
     socket.on('update_order', ({ roomId, newOrderIds }) => {
-        const room = rooms.get(roomId); if(!room) return;
-        const reordered = []; 
-        newOrderIds.forEach(id => { const p = room.players.find(pl => pl.id === id); if(p) reordered.push(p); });
-        room.players = reordered; 
+        const room = rooms.get(roomId);
+        if (!room) return;
+        
+        // Reordena baseado no userId (que é o ID que o front usa nas keys)
+        const reordered = [];
+        newOrderIds.forEach(uid => {
+            const p = room.players.find(pl => pl.userId === uid);
+            if (p) reordered.push(p);
+        });
+        room.players = reordered;
         socket.to(roomId).emit('order_updated', room.players);
     });
 
     socket.on('reveal_cards', ({ roomId }) => {
-        const room = rooms.get(roomId); if(!room || room.host !== socket.id) return; 
+        const room = rooms.get(roomId);
+        if (!room) return;
+        
         room.phase = 'REVEAL';
         const perfectOrder = [...room.players].sort((a, b) => a.secretNumber - b.secretNumber);
+        
         let totalScore = 0;
         const results = room.players.map((player, index) => {
-            const isCorrect = player.id === perfectOrder[index].id; 
+            const isCorrect = player.userId === perfectOrder[index].userId;
             if (isCorrect) totalScore++;
-            return { ...player, isCorrect, secretNumber: player.secretNumber };
+            return { ...player, isCorrect };
         });
+
         io.to(roomId).emit('game_over', { results, totalScore, maxScore: room.players.length });
     });
 
     socket.on('ito_restart', ({ roomId }) => {
         const room = rooms.get(roomId);
-        if (room && room.host === socket.id) startIto(io, room, roomId);
+        if(room) startIto(io, room, roomId);
     });
 };
 
-const handleRejoin = (io, socket, room, oldId, newId) => {
-    const me = room.players.find(p => p.id === newId);
-    if (me && me.secretNumber !== undefined) socket.emit('your_secret_number', me.secretNumber);
-    
-    // ITO não tem gameData complexo, mas garante envio de estado
-    return true; 
-};
-
-module.exports = { startIto, registerItoHandlers, handleRejoin };
+module.exports = { startIto, registerHandlers };

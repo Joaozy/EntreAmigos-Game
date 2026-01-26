@@ -6,15 +6,15 @@ const CHARACTERS = [
 ];
 
 const startWhoAmI = (io, room, roomId) => {
-    const shuffled = shuffle([...CHARACTERS]);
+    const deck = shuffle([...CHARACTERS]);
     
     room.players.forEach(p => {
-        p.character = shuffled.pop() || "Desconhecido";
+        p.character = deck.pop() || "Desconhecido";
     });
 
     room.gameData = {
-        currentTurn: room.players[0].id,
-        phase: 'GUESSING',
+        currentTurnUserId: room.players[0].userId, // Usa UserId
+        phase: 'GUESSING'
     };
     
     room.phase = 'GAME';
@@ -22,37 +22,29 @@ const startWhoAmI = (io, room, roomId) => {
     io.to(roomId).emit('game_started', {
         gameType: 'WHOAMI',
         phase: 'GUESSING',
-        gameData: { currentTurn: room.gameData.currentTurn },
-        players: room.players 
+        gameData: room.gameData,
+        players: room.players
     });
+    
+    // Envia personagem para todos (Front esconde o meu)
 };
 
-const registerWhoAmIHandlers = (io, socket, rooms) => {
+const registerHandlers = (io, socket, rooms) => {
     socket.on('whoami_next_turn', ({ roomId }) => {
         const room = rooms.get(roomId);
-        if(!room || room.gameData.currentTurn !== socket.id) return;
-        
-        const currentIndex = room.players.findIndex(p => p.id === socket.id);
-        const nextIndex = (currentIndex + 1) % room.players.length;
-        room.gameData.currentTurn = room.players[nextIndex].id;
-        
-        io.to(roomId).emit('update_game_data', { 
-            gameData: { currentTurn: room.gameData.currentTurn }, 
-            phase: 'GUESSING' 
-        });
+        if(!room) return;
+        const player = room.players.find(p => p.socketId === socket.id);
+
+        if(player && player.userId === room.gameData.currentTurnUserId) {
+            const currentIdx = room.players.findIndex(p => p.userId === player.userId);
+            const nextIdx = (currentIdx + 1) % room.players.length;
+            room.gameData.currentTurnUserId = room.players[nextIdx].userId;
+            
+            io.to(roomId).emit('update_game_data', { 
+                gameData: room.gameData, phase: 'GUESSING' 
+            });
+        }
     });
 };
 
-const handleRejoin = (io, socket, room, oldId, newId) => {
-    let updated = false;
-    const gd = room.gameData;
-    if (!gd) return false;
-
-    if (gd.currentTurn === oldId) {
-        gd.currentTurn = newId;
-        updated = true;
-    }
-    return updated;
-};
-
-module.exports = { startWhoAmI, registerWhoAmIHandlers, handleRejoin };
+module.exports = { startWhoAmI, registerHandlers };

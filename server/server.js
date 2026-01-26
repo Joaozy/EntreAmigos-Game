@@ -2,17 +2,14 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const db = require('./db');
 
-// --- CARREGAMENTO SEGURO DOS JOGOS ---
 const safeRequire = (path) => {
-    try {
-        return require(path);
-    } catch (e) {
-        console.error(`[AVISO] Falha ao carregar módulo ${path}:`, e.message);
-        return null;
-    }
+    try { return require(path); } 
+    catch (e) { console.error(`[ERRO LOAD] ${path}:`, e.message); return null; }
 };
 
+// Módulos de Jogo
 const gameModules = {
     'ITO': safeRequire('./games/game_ito'),
     'CHA_CAFE': safeRequire('./games/game_chacafe'),
@@ -30,253 +27,224 @@ const gameModules = {
 const app = express();
 app.use(cors());
 const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: "*" }, pingTimeout: 60000 });
 
-const io = new Server(server, {
-  cors: { origin: "*", methods: ["GET", "POST"] },
-  pingTimeout: 60000,   
-  pingInterval: 25000   
-});
-
-// --- ESTADO GLOBAL ---
+// Mapas em Memória
 const rooms = new Map();
-const roomDestructionTimers = new Map();
-const playerDisconnectTimers = new Map();
-const ROOM_TIMEOUT_MS = 10 * 60 * 1000; 
+const playerDisconnectTimers = new Map(); 
 
 io.on('connection', (socket) => {
-  console.log(`[CONEXÃO] Nova: ${socket.id}`);
+  console.log(`[SOCKET] Nova conexão: ${socket.id}`);
 
-  // --- GESTÃO DE SALAS ---
-  socket.on('create_room', ({ nickname, gameType }) => {
-    const roomId = Math.random().toString(36).substring(2, 6).toUpperCase();
-    console.log(`[CRIAR] Sala ${roomId} (${gameType}) por ${nickname}`);
-    
-    rooms.set(roomId, {
-      id: roomId, gameType, host: socket.id, phase: 'LOBBY', 
-      players: [], gameData: {} 
-    });
-    
-    socket.emit('room_created', roomId);
-    joinRoomInternal(socket, roomId, nickname, true);
+  // --- 1. SISTEMA DE AUTENTICAÇÃO ---
+  
+  socket.on('auth_register', ({ name, email, password }) => {
+      console.log(`[AUTH] Tentativa de cadastro: ${email}`);
+      const result = db.registerUser(name, email, password);
+      if (result.success) {
+          socket.emit('auth_success', result.user);
+      } else {
+          socket.emit('auth_error', result.error);
+      }
   });
 
-  socket.on('join_room', ({ roomId, nickname }) => {
-      joinRoomInternal(socket, roomId?.toUpperCase(), nickname, false);
+  socket.on('auth_login', ({ email, password }) => {
+      console.log(`[AUTH] Tentativa de login: ${email}`);
+      const result = db.loginUser(email, password);
+      if (result.success) {
+          socket.emit('auth_success', result.user);
+      } else {
+          socket.emit('auth_error', result.error);
+      }
   });
 
-  // --- RECONEXÃO BLINDADA ---
-  socket.on('rejoin_room', ({ roomId, nickname }) => {
-    const room = rooms.get(roomId);
-    if (!room) { socket.emit('error_msg', 'Sala expirada.'); return; }
-    
-    cancelRoomDestruction(roomId);
-    const existingIndex = room.players.findIndex(p => p.nickname === nickname);
-    
-    if (existingIndex !== -1) {
-       const oldSocketId = room.players[existingIndex].id;
-       const newSocketId = socket.id;
-       cancelPlayerDisconnectTimer(roomId, nickname);
-
-       // Atualiza ID
-       room.players[existingIndex].id = newSocketId;
-       room.players[existingIndex].connected = true; 
-       socket.join(roomId);
-
-       if (room.host === oldSocketId) { 
-           room.host = newSocketId; 
-           room.players[existingIndex].isHost = true; 
-       }
-
-       // Chama o módulo do jogo para consertar IDs internos
-       const module = gameModules[room.gameType];
-       let gameDataUpdated = false;
-       if (module && typeof module.handleRejoin === 'function') {
-           try {
-               gameDataUpdated = module.handleRejoin(io, socket, room, oldSocketId, newSocketId);
-           } catch(e) { console.error("Erro no handleRejoin:", e); }
-       }
-       
-       const safeGameData = { ...room.gameData };
-       delete safeGameData.timer; 
-       delete safeGameData.deck; 
-
-       socket.emit('joined_room', { 
-         roomId, isHost: room.players[existingIndex].isHost, 
-         players: room.players, phase: room.phase, gameType: room.gameType, 
-         gameData: safeGameData, mySecretNumber: room.players[existingIndex].secretNumber 
-       });
-       
-       io.to(roomId).emit('update_players', room.players);
-       if(gameDataUpdated) io.to(roomId).emit('update_game_data', { gameData: safeGameData, phase: room.phase });
-       
-       console.log(`[REJOIN] ${nickname} voltou para ${roomId}`);
-    } else {
-       joinRoomInternal(socket, roomId, nickname, false);
-    }
+  // Login Automático (Reconectar via ID salvo no localStorage)
+  socket.on('auth_reconnect', ({ userId }) => {
+      const user = db.getUser(userId);
+      if (user) {
+          socket.emit('auth_success', user);
+          console.log(`[AUTH] Reconexão automática: ${user.name}`);
+      } else {
+          socket.emit('auth_error', 'Sessão expirada. Faça login novamente.');
+      }
   });
 
-  // --- INICIAR JOGO ---
+  // --- 2. SISTEMA DE SALAS ---
+
+  socket.on('create_room', ({ userId, gameType }) => {
+      const user = db.getUser(userId);
+      if (!user) { socket.emit('error_msg', 'Usuário não autenticado.'); return; }
+
+      const roomId = Math.random().toString(36).substring(2, 6).toUpperCase();
+      console.log(`[SALA] Criada ${roomId} (${gameType}) por ${user.name}`);
+      
+      const newRoom = {
+          id: roomId,
+          gameType,
+          hostId: user.id,
+          phase: 'LOBBY',
+          players: [],
+          gameData: {} 
+      };
+      rooms.set(roomId, newRoom);
+      
+      socket.emit('room_created', roomId);
+      joinRoomInternal(io, socket, newRoom, user);
+  });
+
+  socket.on('join_room', ({ roomId, userId }) => {
+      const room = rooms.get(roomId?.toUpperCase());
+      const user = db.getUser(userId);
+
+      if (!room) { socket.emit('error_msg', 'Sala não encontrada.'); return; }
+      if (!user) { socket.emit('error_msg', 'Usuário inválido.'); return; }
+
+      joinRoomInternal(io, socket, room, user);
+  });
+
+  // --- 3. RECONEXÃO EM JOGO (F5) ---
+  socket.on('rejoin_game', ({ roomId, userId }) => {
+      const room = rooms.get(roomId);
+      const user = db.getUser(userId);
+      
+      if (room && user) {
+          joinRoomInternal(io, socket, room, user);
+      }
+  });
+
+  // --- 4. GAMEPLAY CONTROLLERS ---
+  
   socket.on('start_game', ({ roomId }) => {
-    const room = rooms.get(roomId); 
-    if (!room || room.host !== socket.id) return;
-    
-    const module = gameModules[room.gameType];
-    if (module) {
-        try {
-            console.log(`[START] ${room.gameType} na sala ${roomId}`);
-            
-            // Tenta chamar startNomeDoJogo ou startGame genérico
-            const startFnName = `start${toPascalCase(room.gameType)}`;
-            if (typeof module[startFnName] === 'function') module[startFnName](io, room, roomId);
-            else if (typeof module.startGame === 'function') module.startGame(io, room, roomId);
-            else if (room.gameType === 'CHA_CAFE') module.startChaCafe(io, room, roomId); // Fallback explícito
-            else if (room.gameType === 'ITO') module.startIto(io, room, roomId);
-            else if (room.gameType === 'MEGAQUIZ') module.startMegaQuiz(io, room, roomId);
-            
-        } catch (error) {
-            console.error(`❌ ERRO FATAL ${room.gameType}:`, error);
-            socket.emit('error_msg', 'Erro ao iniciar jogo.');
-        }
-    }
+      const room = rooms.get(roomId);
+      if (!room) return;
+      
+      // Validação de Host segura
+      const player = room.players.find(p => p.socketId === socket.id);
+      if (!player || player.userId !== room.hostId) return;
+
+      const module = gameModules[room.gameType];
+      if (module) {
+          try {
+              const startFn = module[`start${toPascalCase(room.gameType)}`] || module.startGame || module.startChaCafe;
+              if (typeof startFn === 'function') startFn(io, room, roomId);
+          } catch (e) { console.error(e); }
+      }
   });
 
-  // --- VOLTAR AO LOBBY (CORREÇÃO DO BOTÃO) ---
+  // Reset e Lobby
   const handleReset = ({ roomId }) => {
       const room = rooms.get(roomId);
-      if (room && (room.host === socket.id || !socket.id)) { // !socket.id permite reset interno
-          console.log(`[RESET] Sala ${roomId} voltou ao Lobby`);
-          if (room.gameData?.timer) clearInterval(room.gameData.timer);
-          
-          room.phase = 'LOBBY';
-          room.gameData = {}; 
-          room.players.forEach(p => {
-              p.score = 0; p.lives = null; p.cards = []; 
-              p.isReady = false; p.hasSubmitted = false; 
-              p.clue = ''; p.secretNumber = null;
+      if(room) {
+          if(room.gameData?.timer) clearInterval(room.gameData.timer);
+          room.phase = 'LOBBY'; room.gameData = {};
+          room.players.forEach(p => { 
+              p.score = 0; p.lives = null; p.cards = []; p.hasSubmitted = false; 
           });
-
           io.to(roomId).emit('returned_to_lobby', { phase: 'LOBBY', players: room.players });
       }
   };
-
-  // Aceita todos os nomes possíveis que o front possa enviar
   socket.on('request_restart', handleReset);
-  socket.on('restart_game', handleReset);     // <--- CORREÇÃO AQUI
+  socket.on('restart_game', handleReset);
   socket.on('return_to_lobby', handleReset);
 
-  // --- UTILS ---
+  // Registro de eventos específicos dos jogos
   Object.values(gameModules).forEach(mod => {
-      if(mod) Object.values(mod).forEach(fn => {
+      if (mod) Object.values(mod).forEach(fn => {
           if (typeof fn === 'function' && fn.name?.startsWith('register')) fn(io, socket, rooms);
       });
   });
 
-  socket.on('send_message', (data) => io.to(data.roomId).emit('receive_message', data));
-  
-  socket.on('kick_player', ({roomId, targetId}) => {
-    const room = rooms.get(roomId); if (!room || room.host !== socket.id) return;
-    room.players = room.players.filter(p => p.id !== targetId);
-    io.to(targetId).emit('kicked'); 
-    io.to(roomId).emit('update_players', room.players);
+  // Salvar Vitória
+  socket.on('record_win', ({ roomId, winnerId }) => {
+      const room = rooms.get(roomId);
+      if(room) db.saveMatch(room.gameType, winnerId, room.players);
   });
 
-  // --- DISCONNECT ---
+  socket.on('kick_player', ({roomId, targetId}) => {
+      const room = rooms.get(roomId);
+      if(room) {
+          const p = room.players.find(x => x.userId === targetId);
+          if(p) { io.to(p.socketId).emit('kicked'); removePlayer(io, roomId, targetId); }
+      }
+  });
+
   socket.on('disconnect', () => {
-     rooms.forEach((room, roomId) => {
-         const player = room.players.find(p => p.id === socket.id);
-         if (player) {
-             if (room.phase === 'LOBBY') {
-                 handleImmediateExit(io, room, roomId, socket.id);
-             } else {
-                 player.connected = false; 
-                 io.to(roomId).emit('update_players', room.players); 
-                 startPlayerDisconnectTimer(io, roomId, player.nickname, socket.id);
-                 if (room.players.every(p => !p.connected)) scheduleRoomDestruction(roomId);
-             }
-         }
-     });
+      rooms.forEach((room, roomId) => {
+          const player = room.players.find(p => p.socketId === socket.id);
+          if (player) {
+              player.connected = false;
+              io.to(roomId).emit('update_players', room.players);
+              const timeout = room.phase === 'LOBBY' ? 2000 : 60000;
+              const timer = setTimeout(() => removePlayer(io, roomId, player.userId), timeout);
+              playerDisconnectTimers.set(player.userId, timer);
+          }
+      });
   });
 });
 
 // --- HELPER FUNCTIONS ---
-function toPascalCase(str) {
-    return str.toLowerCase().replace(/_(\w)/g, (m, c) => c.toUpperCase()).replace(/^\w/, c => c.toUpperCase());
+
+function joinRoomInternal(io, socket, room, user) {
+    if (playerDisconnectTimers.has(user.id)) {
+        clearTimeout(playerDisconnectTimers.get(user.id));
+        playerDisconnectTimers.delete(user.id);
+    }
+
+    let player = room.players.find(p => p.userId === user.id);
+    
+    if (player) {
+        // Reconexão
+        player.socketId = socket.id;
+        player.connected = true;
+        player.nickname = user.name; // Atualiza nome do DB
+    } else {
+        // Novo na sala
+        player = {
+            userId: user.id,
+            socketId: socket.id,
+            nickname: user.name,
+            connected: true,
+            isHost: room.hostId === user.id,
+            score: 0
+        };
+        room.players.push(player);
+    }
+    
+    socket.join(room.id);
+
+    const safeData = { ...room.gameData };
+    delete safeData.timer; delete safeData.deck;
+
+    socket.emit('joined_room', { 
+        roomId: room.id, isHost: player.isHost, players: room.players, 
+        gameType: room.gameType, phase: room.phase, gameData: safeData 
+    });
+
+    // Reenvio de dados privados
+    if(player.secretNumber) socket.emit('your_secret_number', player.secretNumber);
+    if(player.character) socket.emit('your_character', player.character);
+
+    io.to(room.id).emit('update_players', room.players);
 }
 
-function startPlayerDisconnectTimer(io, roomId, nickname, oldSocketId) {
-    const key = `${roomId}-${nickname}`;
-    if (playerDisconnectTimers.has(key)) return;
-    const timer = setTimeout(() => {
-        const room = rooms.get(roomId);
-        if (room) {
-            handleImmediateExit(io, room, roomId, oldSocketId);
-            if (room.phase !== 'LOBBY' && room.players.length < 2) { // Força reset se esvaziar
-                const hostSocket = io.sockets.sockets.get(room.host);
-                if(hostSocket) hostSocket.emit('request_restart', { roomId });
+function removePlayer(io, roomId, userId) {
+    const room = rooms.get(roomId); if (!room) return;
+    const idx = room.players.findIndex(p => p.userId === userId);
+    if (idx !== -1) {
+        room.players.splice(idx, 1);
+        if (room.players.length === 0) rooms.delete(roomId);
+        else {
+            if (room.hostId === userId) { 
+                room.hostId = room.players[0].userId; 
+                room.players[0].isHost = true; 
             }
+            io.to(roomId).emit('update_players', room.players);
         }
-        playerDisconnectTimers.delete(key);
-    }, 60000); 
-    playerDisconnectTimers.set(key, timer);
-}
-
-function cancelPlayerDisconnectTimer(roomId, nickname) {
-    const key = `${roomId}-${nickname}`;
-    if (playerDisconnectTimers.has(key)) {
-        clearTimeout(playerDisconnectTimers.get(key));
-        playerDisconnectTimers.delete(key);
     }
+    playerDisconnectTimers.delete(userId);
 }
 
-function handleImmediateExit(io, room, roomId, socketId) {
-    const idx = room.players.findIndex(p => p.id === socketId);
-    if (idx === -1) return;
-    room.players.splice(idx, 1);
-    if (room.players.length === 0) rooms.delete(roomId);
-    else {
-        if (room.host === socketId) { room.host = room.players[0].id; room.players[0].isHost = true; }
-        io.to(roomId).emit('update_players', room.players);
-    }
-}
-
-function cancelRoomDestruction(roomId) {
-    if (roomDestructionTimers.has(roomId)) {
-        clearTimeout(roomDestructionTimers.get(roomId));
-        roomDestructionTimers.delete(roomId);
-    }
-}
-
-function scheduleRoomDestruction(roomId) {
-    if (roomDestructionTimers.has(roomId)) return;
-    const timer = setTimeout(() => {
-        if (rooms.has(roomId)) {
-            const room = rooms.get(roomId);
-            if (room?.gameData?.timer) clearInterval(room.gameData.timer);
-            rooms.delete(roomId);
-        }
-        roomDestructionTimers.delete(roomId);
-    }, ROOM_TIMEOUT_MS);
-    roomDestructionTimers.set(roomId, timer);
-}
-
-function joinRoomInternal(socket, roomId, nickname, isHost) {
-  if (!roomId) return; 
-  const room = rooms.get(roomId.toUpperCase()); 
-  if (!room) { socket.emit('error_msg', 'Sala não encontrada'); return; }
-  cancelRoomDestruction(roomId.toUpperCase()); 
-  
-  if (room.players.some(p => p.nickname === nickname && p.connected)) { socket.emit('error_msg', 'Nome em uso.'); return; }
-
-  const newPlayer = { id: socket.id, nickname, isHost, connected: true, secretNumber: null, clue: '', hasSubmitted: false, score: 0 };
-  room.players.push(newPlayer); 
-  socket.join(roomId);
-  
-  const safeGameData = { ...room.gameData };
-  delete safeGameData.timer; delete safeGameData.deck;
-
-  socket.emit('joined_room', { roomId, isHost, players: room.players, gameType: room.gameType, phase: room.phase, gameData: safeGameData });
-  io.to(roomId).emit('update_players', room.players);
-}
+function toPascalCase(s) { return s.toLowerCase().replace(/_(\w)/g, (m,c)=>c.toUpperCase()).replace(/^\w/,c=>c.toUpperCase()); }
 
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, '0.0.0.0', () => console.log(`🚀 SERVIDOR OK NA PORTA ${PORT}`));
+server.listen(PORT, '0.0.0.0', () => console.log(`🚀 SERVIDOR SEGURO RODANDO NA PORTA ${PORT}`));
