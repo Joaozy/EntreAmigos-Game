@@ -26,15 +26,19 @@ export default function Login() {
 
             if (authError) throw authError;
 
-            // 2. Criar Perfil Público
+            // 2. Criar Perfil Público (Se o cadastro Auth funcionou)
             if (authData.user) {
                 const { error: profileError } = await supabase
                     .from('profiles')
                     .insert([{ id: authData.user.id, nickname: formData.name }]);
                 
-                if (profileError) throw profileError;
-                alert("Cadastro realizado! Você já pode entrar.");
-                setIsRegister(false); // Volta para tela de login
+                if (profileError) {
+                    // Se falhar o perfil, tenta criar só o perfil de novo ou avisa
+                    console.error("Erro perfil:", profileError);
+                }
+                
+                alert("Cadastro realizado com sucesso! Fazendo login...");
+                // O login automático acontece pelo onAuthStateChange no Context
             }
 
         } else {
@@ -44,7 +48,6 @@ export default function Login() {
                 password: formData.password,
             });
             if (error) throw error;
-            // O GameContext vai detectar a mudança de sessão automaticamente
         }
     } catch (err) {
         setError(err.message || "Erro na autenticação.");
@@ -83,11 +86,14 @@ export default function Login() {
 
             {error && <div className="bg-red-100 text-red-600 text-sm font-bold p-3 rounded-lg text-center">{error}</div>}
 
-            <button type="submit" disabled={loading || !isConnected} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl shadow-lg transition disabled:opacity-50 mt-4">
+            {/* BOTÃO DESTRAVADO (Removemos !isConnected) */}
+            <button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl shadow-lg transition disabled:opacity-50 mt-4">
                 {loading ? "PROCESSANDO..." : (isRegister ? "CRIAR CONTA" : "ENTRAR")}
             </button>
         </form>
-        {!isConnected && <p className="text-center text-red-500 text-xs mt-4 font-bold animate-pulse">Servidor Offline</p>}
+        
+        {/* Aviso discreto se o socket estiver caindo */}
+        {!isConnected && <p className="text-center text-yellow-600 text-xs mt-4 animate-pulse">Conectando ao servidor de jogos...</p>}
       </div>
     </div>
   );
