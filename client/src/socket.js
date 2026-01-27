@@ -1,14 +1,12 @@
+// client/src/socket.js
 import { io } from 'socket.io-client';
 
-// Detecta automaticamente se está em dev ou prod
-const URL = import.meta.env.PROD 
-  ? 'https://www.entreamigos.app.br' // Sua URL de prod
-  : (import.meta.env.VITE_API_URL || 'http://localhost:3001');
+// Se estiver em produção (site online), usa a raiz '/' (o Nginx cuida do resto)
+// Se estiver no seu PC desenvolvendo, usa localhost:3001
+const URL = import.meta.env.PROD ? undefined : 'http://localhost:3001';
 
 export const socket = io(URL, {
-  autoConnect: false,
-  reconnection: true,
-  reconnectionAttempts: 10,
-  reconnectionDelay: 1000,
-  timeout: 20000
+    transports: ['websocket', 'polling'], // Força métodos compatíveis
+    autoConnect: true,
+    reconnection: true,
 });
