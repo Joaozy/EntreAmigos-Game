@@ -15,6 +15,7 @@ export default function Login() {
     e.preventDefault();
     setLoading(true);
     setError('');
+    console.log("Iniciando autenticação...");
 
     try {
         if (isRegister) {
@@ -26,19 +27,15 @@ export default function Login() {
 
             if (authError) throw authError;
 
-            // 2. Criar Perfil Público (Se o cadastro Auth funcionou)
+            // 2. Criar Perfil Público
             if (authData.user) {
                 const { error: profileError } = await supabase
                     .from('profiles')
                     .insert([{ id: authData.user.id, nickname: formData.name }]);
                 
-                if (profileError) {
-                    // Se falhar o perfil, tenta criar só o perfil de novo ou avisa
-                    console.error("Erro perfil:", profileError);
-                }
+                if (profileError) console.error("Erro perfil:", profileError);
                 
-                alert("Cadastro realizado com sucesso! Fazendo login...");
-                // O login automático acontece pelo onAuthStateChange no Context
+                alert("Cadastro realizado! O login será automático.");
             }
 
         } else {
@@ -49,7 +46,9 @@ export default function Login() {
             });
             if (error) throw error;
         }
+        console.log("Autenticação Supabase OK. Aguardando GameContext...");
     } catch (err) {
+        console.error("Erro Auth:", err);
         setError(err.message || "Erro na autenticação.");
     } finally {
         setLoading(false);
@@ -72,27 +71,42 @@ export default function Login() {
             {isRegister && (
                 <div>
                     <label className="text-xs font-bold text-slate-500 ml-1">APELIDO</label>
-                    <input name="name" className="w-full bg-slate-50 border-2 border-slate-200 rounded-xl p-3 font-bold outline-none focus:border-indigo-500" placeholder="Ex: Mestre dos Jogos" onChange={handleChange} />
+                    <input 
+                        name="name" 
+                        className="w-full bg-slate-50 text-slate-900 border-2 border-slate-200 rounded-xl p-3 font-bold outline-none focus:border-indigo-500 placeholder-slate-400" 
+                        placeholder="Ex: Mestre dos Jogos" 
+                        onChange={handleChange} 
+                    />
                 </div>
             )}
             <div>
                 <label className="text-xs font-bold text-slate-500 ml-1">E-MAIL</label>
-                <input name="email" type="email" className="w-full bg-slate-50 border-2 border-slate-200 rounded-xl p-3 font-bold outline-none focus:border-indigo-500" placeholder="seu@email.com" onChange={handleChange} />
+                <input 
+                    name="email" 
+                    type="email" 
+                    className="w-full bg-slate-50 text-slate-900 border-2 border-slate-200 rounded-xl p-3 font-bold outline-none focus:border-indigo-500 placeholder-slate-400" 
+                    placeholder="seu@email.com" 
+                    onChange={handleChange} 
+                />
             </div>
             <div>
                 <label className="text-xs font-bold text-slate-500 ml-1">SENHA</label>
-                <input name="password" type="password" className="w-full bg-slate-50 border-2 border-slate-200 rounded-xl p-3 font-bold outline-none focus:border-indigo-500" placeholder="******" onChange={handleChange} />
+                <input 
+                    name="password" 
+                    type="password" 
+                    className="w-full bg-slate-50 text-slate-900 border-2 border-slate-200 rounded-xl p-3 font-bold outline-none focus:border-indigo-500 placeholder-slate-400" 
+                    placeholder="******" 
+                    onChange={handleChange} 
+                />
             </div>
 
             {error && <div className="bg-red-100 text-red-600 text-sm font-bold p-3 rounded-lg text-center">{error}</div>}
 
-            {/* BOTÃO DESTRAVADO (Removemos !isConnected) */}
             <button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl shadow-lg transition disabled:opacity-50 mt-4">
                 {loading ? "PROCESSANDO..." : (isRegister ? "CRIAR CONTA" : "ENTRAR")}
             </button>
         </form>
         
-        {/* Aviso discreto se o socket estiver caindo */}
         {!isConnected && <p className="text-center text-yellow-600 text-xs mt-4 animate-pulse">Conectando ao servidor de jogos...</p>}
       </div>
     </div>

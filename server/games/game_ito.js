@@ -1,6 +1,4 @@
 const { generateDeck } = require('../utils/helpers');
-
-// Temas de segurança
 const THEMES = [
     { title: "Popularidade", min: "Baixa", max: "Alta" },
     { title: "Tamanho", min: "Pequeno", max: "Grande" },
@@ -8,88 +6,82 @@ const THEMES = [
     { title: "Perigo", min: "Seguro", max: "Mortal" }
 ];
 
-const startIto = (io, room, roomId) => {
-    const deck = generateDeck();
-    const theme = THEMES[Math.floor(Math.random() * THEMES.length)];
-
-    room.gameData = { theme };
-    room.phase = 'GAME';
-
-    room.players.forEach(p => {
-        p.secretNumber = deck.pop();
-        p.clue = '';
-        p.hasSubmitted = false;
-        delete p.isCorrect;
-    });
-
-    io.to(roomId).emit('game_started', {
-        gameType: 'ITO',
-        phase: 'CLUE_PHASE',
-        gameData: room.gameData,
-        players: room.players
-    });
-
-    // Envia segredo individualmente
-    room.players.forEach(p => {
-        io.to(p.socketId).emit('your_secret_number', p.secretNumber);
-    });
-};
-
-const registerHandlers = (io, socket, rooms) => {
+module.exports = (io, socket, rooms) => {
     socket.on('submit_clue', ({ roomId, clue }) => {
-        const room = rooms.get(roomId);
+        const room = rooms[roomId]; // CORRIGIDO
         if (!room) return;
         const player = room.players.find(p => p.socketId === socket.id);
-
         if (player) {
             player.clue = clue;
             player.hasSubmitted = true;
-
-            // Verifica se todos enviaram
             if (room.players.every(p => p.hasSubmitted)) {
-                io.to(roomId).emit('phase_change', { phase: 'ORDERING', players: room.players });
+                room.state.phase = 'ORDERING';
+                io.to(roomId).emit('joined_room', { roomId, players: room.players, phase: 'ORDERING', gameType: 'ITO' });
             } else {
-                io.to(roomId).emit('player_submitted', { playerId: player.userId }); // Usa userId pra front saber quem foi
                 io.to(roomId).emit('update_players', room.players);
             }
         }
     });
 
     socket.on('update_order', ({ roomId, newOrderIds }) => {
-        const room = rooms.get(roomId);
+        const room = rooms[roomId]; // CORRIGIDO
         if (!room) return;
-        
-        // Reordena baseado no userId (que é o ID que o front usa nas keys)
         const reordered = [];
         newOrderIds.forEach(uid => {
             const p = room.players.find(pl => pl.userId === uid);
             if (p) reordered.push(p);
         });
         room.players = reordered;
-        socket.to(roomId).emit('order_updated', room.players);
+        socket.to(roomId).emit('update_players', room.players);
     });
 
     socket.on('reveal_cards', ({ roomId }) => {
-        const room = rooms.get(roomId);
+        const room = rooms[roomId]; // CORRIGIDO
         if (!room) return;
-        
-        room.phase = 'REVEAL';
+        room.state.phase = 'REVEAL';
         const perfectOrder = [...room.players].sort((a, b) => a.secretNumber - b.secretNumber);
-        
         let totalScore = 0;
         const results = room.players.map((player, index) => {
             const isCorrect = player.userId === perfectOrder[index].userId;
             if (isCorrect) totalScore++;
             return { ...player, isCorrect };
         });
-
-        io.to(roomId).emit('game_over', { results, totalScore, maxScore: room.players.length });
+        io.to(roomId).emit('game_over', { results, totalScore, maxScore: room.players.length, phase: 'REVEAL' });
     });
 
     socket.on('ito_restart', ({ roomId }) => {
-        const room = rooms.get(roomId);
-        if(room) startIto(io, room, roomId);
+        const room = rooms[roomId]; // CORRIGIDO
+        if(room) {
+            const nextState = module.exports.initGame(room);
+            room.phase = nextState.phase;
+            io.to(roomId).emit('joined_room', { 
+                roomId, players: room.players, phase: nextState.phase, gameType: 'ITO', gameData: nextState.gameData 
+            });
+            // Reenvia segredos
+            room.players.forEach(p => io.to(p.socketId).emit('your_secret_number', p.secretNumber));
+        }
     });
 };
 
-module.exports = { startIto, registerHandlers };
+module.exports.initGame = (room) => {
+    const deck = generateDeck();
+    room.state = { theme: THEMES[Math.floor(Math.random() * THEMES.length)], phase: 'CLUE_PHASE' };
+    
+    room.players.forEach(p => {
+        p.secretNumber = deck.pop();
+        p.clue = '';
+        p.hasSubmitted = false;
+        delete p.isCorrect;
+    });
+    
+    // Pequeno hack: Enviar segredos aqui é difícil sem o IO. 
+    // O ideal é o cliente pedir, mas vamos deixar o start_game do server.js lidar ou o restart lidar.
+    // Para o primeiro start, o server.js não envia segredos específicos.
+    // Vamos adicionar um delay para enviar via require IO
+    setTimeout(() => {
+        const io = require('../server').io;
+        room.players.forEach(p => io.to(p.socketId).emit('your_secret_number', p.secretNumber));
+    }, 200);
+
+    return { phase: 'CLUE_PHASE', gameData: room.state };
+};

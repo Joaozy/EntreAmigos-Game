@@ -3,204 +3,213 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 
-// --- CARREGAMENTO SEGURO DOS JOGOS ---
-const safeRequire = (path) => {
-    try { return require(path); } 
-    catch (e) { console.error(`[ERRO LOAD] ${path}:`, e.message); return null; }
-};
-
-const gameModules = {
-    'ITO': safeRequire('./games/game_ito'),
-    'CHA_CAFE': safeRequire('./games/game_chacafe'),
-    'CODENAMES': safeRequire('./games/game_codenames'),
-    'STOP': safeRequire('./games/game_stop'),
-    'TERMO': safeRequire('./games/game_termo'),
-    'CINEMOJI': safeRequire('./games/game_cinemoji'),
-    'DIXIT': safeRequire('./games/game_dixit'),
-    'MEGAQUIZ': safeRequire('./games/game_megaquiz'),
-    'SPY': safeRequire('./games/game_spy'),
-    'WHOAMI': safeRequire('./games/game_whoami'),
-    'ENIGMA': safeRequire('./games/game_enigma')
+// --- 1. IMPORTAÇÃO AUTOMATIZADA DOS JOGOS ---
+const GAME_MODULES = {
+    'ITO': require('./games/game_ito'),
+    'CHA_CAFE': require('./games/game_chacafe'),
+    'MEGAQUIZ': require('./games/game_megaquiz'),
+    'WHOAMI': require('./games/game_whoami'),
+    'CODENAMES': require('./games/game_codenames'),
+    'STOP': require('./games/game_stop'),
+    'TERMO': require('./games/game_termo'),
+    'CINEMOJI': require('./games/game_cinemoji'),
+    'DIXIT': require('./games/game_dixit'),
+    'SPY': require('./games/game_spy'),
+    'ENIGMA': require('./games/game_enigma'),
 };
 
 const app = express();
 app.use(cors());
+
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" }, pingTimeout: 60000 });
-
-// --- ESTADO GLOBAL (RAM) ---
-const rooms = new Map();
-const activeUsers = new Map(); // socketId -> { userId, nickname }
-
-io.on('connection', (socket) => {
-  console.log(`[CONEXÃO] ${socket.id}`);
-
-  // 1. IDENTIFICAÇÃO (Vem do Front após login no Supabase)
-  socket.on('identify', ({ userId, nickname }) => {
-      activeUsers.set(socket.id, { userId, nickname });
-      console.log(`[IDENTIFICADO] ${nickname} (${userId})`);
-  });
-
-  // 2. CRIAR SALA
-  socket.on('create_room', ({ userId, nickname, gameType }) => {
-      if (!userId) return;
-      const roomId = Math.random().toString(36).substring(2, 6).toUpperCase();
-      console.log(`[CRIAR] Sala ${roomId} (${gameType}) - Host: ${nickname}`);
-      
-      const newRoom = {
-          id: roomId, gameType, hostId: userId, phase: 'LOBBY', 
-          players: [], gameData: {} 
-      };
-      rooms.set(roomId, newRoom);
-      
-      socket.emit('room_created', roomId);
-      joinRoomInternal(io, socket, newRoom, { id: userId, name: nickname });
-  });
-
-  // 3. ENTRAR NA SALA
-  socket.on('join_room', ({ roomId, userId, nickname }) => {
-      const room = rooms.get(roomId?.toUpperCase());
-      if (!room) { socket.emit('error_msg', 'Sala não encontrada.'); return; }
-      joinRoomInternal(io, socket, room, { id: userId, name: nickname });
-  });
-
-  // 4. RECONEXÃO (F5)
-  socket.on('rejoin_room', ({ roomId, userId }) => {
-      const room = rooms.get(roomId);
-      // Se o usuário já enviou 'identify' antes, usamos o cache. Se não, esperamos.
-      // O joinRoomInternal atualiza o socketId se o userId bater.
-      if (room) {
-          // Precisamos do nickname. Vamos tentar achar na sala ou no cache.
-          const existingPlayer = room.players.find(p => p.userId === userId);
-          const cachedUser = activeUsers.get(socket.id);
-          const name = existingPlayer?.nickname || cachedUser?.nickname || "Jogador";
-          
-          joinRoomInternal(io, socket, room, { id: userId, name });
-      }
-  });
-
-  // 5. START GAME
-  socket.on('start_game', ({ roomId }) => {
-        const room = rooms[roomId];
-        if (!room) return;
-        
-        // Verifica se quem pediu é o Host
-        const player = room.players.find(p => p.socketId === socket.id);
-        if (!player || !player.isHost) return;
-
-        // LÓGICA DE INICIALIZAÇÃO POR JOGO
-        if (room.gameType === 'TERMO') {
-            const termoGame = require('./games/game_termo');
-            const initialState = termoGame.initGame(room);
-            room.phase = initialState.phase;
-        } 
-        // Adicione outros 'else if' para outros jogos aqui (MEGAQUIZ, etc)
-        else {
-            // Fallback para jogos que ainda não tem init
-            room.phase = 'PLAYING';
-        }
-
-        // Avisa a todos para mudarem de tela
-        io.to(roomId).emit('joined_room', {
-            roomId: room.id,
-            players: room.players,
-            gameType: room.gameType,
-            phase: room.phase,
-            // Envia dados iniciais se houver
-            gameData: room.state 
-        });
-    });
-
-  // 6. EVENTOS DE JOGO GENÉRICOS
-  const handleReset = ({ roomId }) => {
-      const room = rooms.get(roomId);
-      if(room) {
-          if(room.gameData?.timer) clearInterval(room.gameData.timer);
-          room.phase = 'LOBBY'; room.gameData = {};
-          room.players.forEach(p => { 
-              p.score = 0; p.lives = null; p.cards = []; p.hasSubmitted = false; 
-          });
-          io.to(roomId).emit('returned_to_lobby', { phase: 'LOBBY', players: room.players });
-      }
-  };
-  socket.on('request_restart', handleReset);
-  socket.on('restart_game', handleReset);
-  socket.on('return_to_lobby', handleReset);
-  
-  Object.values(gameModules).forEach(mod => {
-      if (mod) Object.values(mod).forEach(fn => {
-          if (typeof fn === 'function' && fn.name?.startsWith('register')) fn(io, socket, rooms);
-      });
-  });
-
-  socket.on('disconnect', () => {
-      activeUsers.delete(socket.id);
-      rooms.forEach((room, roomId) => {
-          const player = room.players.find(p => p.socketId === socket.id);
-          if (player) {
-              player.connected = false;
-              io.to(roomId).emit('update_players', room.players);
-              // Timeout para remover (60s)
-              setTimeout(() => {
-                  const r = rooms.get(roomId);
-                  if(r) {
-                      const pIdx = r.players.findIndex(pl => pl.userId === player.userId);
-                      // Remove apenas se ainda estiver desconectado
-                      if(pIdx !== -1 && !r.players[pIdx].connected) {
-                          r.players.splice(pIdx, 1);
-                          if(r.players.length === 0) rooms.delete(roomId);
-                          else {
-                              // Passa host se necessário
-                              if(r.hostId === player.userId) {
-                                  r.hostId = r.players[0].userId;
-                                  r.players[0].isHost = true;
-                              }
-                              io.to(roomId).emit('update_players', r.players);
-                          }
-                      }
-                  }
-              }, 60000);
-          }
-      });
-  });
+const io = new Server(server, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
 });
 
-function joinRoomInternal(io, socket, room, user) {
-    let player = room.players.find(p => p.userId === user.id);
-    
-    if (player) {
-        // Reconexão
-        player.socketId = socket.id;
-        player.connected = true;
-    } else {
-        // Novo na sala
-        player = { 
-            userId: user.id, 
-            socketId: socket.id, 
-            nickname: user.name, 
-            connected: true, 
-            isHost: room.hostId === user.id, 
-            score: 0 
-        };
-        room.players.push(player);
-    }
-    socket.join(room.id);
-    
-    const safeData = { ...room.gameData };
-    delete safeData.timer; delete safeData.deck;
+let rooms = {}; 
 
-    socket.emit('joined_room', { 
-        roomId: room.id, isHost: player.isHost, players: room.players, 
-        gameType: room.gameType, phase: room.phase, gameData: safeData 
+io.on('connection', (socket) => {
+    console.log(`[+] Cliente conectado: ${socket.id}`);
+
+    // --- 2. REGISTRAR LISTENERS DE TODOS OS JOGOS ---
+    Object.values(GAME_MODULES).forEach(gameModule => {
+        if (typeof gameModule === 'function') {
+            gameModule(io, socket, rooms);
+        }
     });
-    
-    if(player.secretNumber) socket.emit('your_secret_number', player.secretNumber);
-    if(player.character) socket.emit('your_character', player.character);
-    
-    io.to(room.id).emit('update_players', room.players);
-}
 
-function toPascalCase(s) { return s.toLowerCase().replace(/_(\w)/g, (m,c)=>c.toUpperCase()).replace(/^\w/,c=>c.toUpperCase()); }
+    // --- 3. EVENTOS GERAIS DA SALA ---
+
+    socket.on('identify', ({ userId, nickname }) => {
+        socket.data.userId = userId;
+        socket.data.nickname = nickname;
+    });
+
+    socket.on('rejoin_room', ({ roomId }) => {
+        const room = rooms[roomId];
+        if (room) {
+            socket.join(roomId);
+            socket.data.roomId = roomId;
+            const player = room.players.find(p => p.userId === socket.data.userId);
+            if (player) {
+                player.socketId = socket.id;
+                console.log(`[↻] Player ${player.nickname} reconectou na sala ${roomId}`);
+            }
+
+            // Pega dados públicos formatados se o jogo tiver helper
+            let gameDataToSend = room.state;
+            const gameModule = GAME_MODULES[room.gameType];
+            if (gameModule && typeof gameModule.getPublicData === 'function') {
+                gameDataToSend = gameModule.getPublicData(room.state);
+            }
+
+            socket.emit('joined_room', {
+                roomId,
+                players: room.players,
+                gameType: room.gameType,
+                phase: room.phase,
+                gameData: gameDataToSend
+            });
+        }
+    });
+
+    socket.on('create_room', ({ nickname, gameId, userId }) => {
+        const roomId = Math.random().toString(36).substring(2, 6).toUpperCase();
+        const selectedGame = gameId || 'TERMO'; 
+
+        rooms[roomId] = {
+            id: roomId,
+            players: [],
+            gameType: selectedGame,
+            phase: 'LOBBY',
+            state: {} 
+        };
+
+        const player = { 
+            id: socket.id, socketId: socket.id, userId: userId || socket.id,
+            nickname, isHost: true, score: 0 
+        };
+        
+        rooms[roomId].players.push(player);
+        socket.join(roomId);
+        socket.data.roomId = roomId;
+        socket.data.userId = userId;
+
+        socket.emit('joined_room', { 
+            roomId, players: rooms[roomId].players, gameType: selectedGame, phase: 'LOBBY'
+        });
+        
+        console.log(`[★] Sala ${roomId} criada: ${selectedGame}`);
+    });
+
+    socket.on('join_room', ({ roomId, nickname, userId }) => {
+        const room = rooms[roomId?.toUpperCase()];
+        if (room) {
+            const existingIdx = room.players.findIndex(p => p.userId === userId);
+            if (existingIdx !== -1) {
+                room.players[existingIdx].socketId = socket.id;
+                room.players[existingIdx].nickname = nickname;
+            } else {
+                room.players.push({ 
+                    id: socket.id, socketId: socket.id, userId: userId || socket.id,
+                    nickname, isHost: false, score: 0 
+                });
+            }
+            
+            socket.join(room.id);
+            socket.data.roomId = room.id;
+            socket.data.userId = userId;
+
+            io.to(room.id).emit('joined_room', {
+                roomId: room.id,
+                players: room.players,
+                gameType: room.gameType,
+                phase: room.phase,
+                gameData: room.state
+            });
+            console.log(`[->] ${nickname} entrou na sala ${room.id}`);
+        } else {
+            socket.emit('error_msg', 'Sala não encontrada!');
+        }
+    });
+
+    socket.on('select_game', ({ gameId }) => {
+        const room = rooms[socket.data.roomId];
+        if (!room) return;
+        if (GAME_MODULES[gameId]) {
+            room.gameType = gameId;
+            io.to(room.id).emit('joined_room', {
+                roomId: room.id, players: room.players, gameType: gameId, phase: 'LOBBY'
+            });
+        }
+    });
+
+    // INICIAR JOGO (CORRIGIDO PARA PASSAR IO)
+    socket.on('start_game', () => {
+        const roomId = socket.data.roomId;
+        const room = rooms[roomId];
+        if (!room) return;
+
+        const gameModule = GAME_MODULES[room.gameType];
+        console.log(`[▶] Iniciando ${room.gameType} na sala ${roomId}`);
+
+        if (gameModule && typeof gameModule.initGame === 'function') {
+            try {
+                // AQUI ESTÁ O SEGREDO: PASSAMOS O IO
+                const initData = gameModule.initGame(room, io); 
+                room.phase = initData.phase || 'PLAYING';
+                
+                // Prioriza os dados retornados pelo initGame
+                let dataToSend = initData.gameData || room.state;
+
+                io.to(roomId).emit('joined_room', {
+                    roomId: room.id,
+                    players: room.players,
+                    gameType: room.gameType,
+                    phase: room.phase,
+                    gameData: dataToSend
+                });
+            } catch (err) {
+                console.error(`Erro init ${room.gameType}:`, err);
+                socket.emit('error_msg', 'Erro ao iniciar jogo.');
+            }
+        } else {
+            room.phase = 'PLAYING';
+            room.state = { status: 'started' };
+            io.to(roomId).emit('joined_room', {
+                roomId: room.id,
+                players: room.players,
+                gameType: room.gameType,
+                phase: room.phase,
+                gameData: room.state
+            });
+        }
+    });
+
+    socket.on('send_message', (data) => {
+        io.to(data.roomId).emit('receive_message', data);
+    });
+
+    socket.on('leave_room', () => {
+        const roomId = socket.data.roomId;
+        if(roomId && rooms[roomId]) {
+            socket.leave(roomId);
+            rooms[roomId].players = rooms[roomId].players.filter(p => p.socketId !== socket.id);
+            io.to(roomId).emit('update_players', rooms[roomId].players);
+            socket.data.roomId = null;
+        }
+    });
+
+    socket.on('disconnect', () => {
+        // Lógica de desconexão silenciosa para permitir reconnect
+    });
+});
 
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, '0.0.0.0', () => console.log(`🚀 SERVIDOR V3 (SUPABASE) RODANDO NA PORTA ${PORT}`));
+// CORREÇÃO CRÍTICA: Escutar em 0.0.0.0 para aceitar conexões locais e de rede
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`🔥 Servidor rodando na porta ${PORT}`);
+});

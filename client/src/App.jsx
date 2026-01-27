@@ -2,10 +2,11 @@ import React from 'react';
 import { GameProvider, useGame } from './context/GameContext';
 import Login from './components/Login';
 import Lobby from './components/Lobby';
-import WaitingRoom from './components/WaitingRoom'; // <--- IMPORT NOVO
+import WaitingRoom from './components/WaitingRoom'; 
+import Chat from './Chat'; // <--- IMPORTANTE
 
 // IMPORTE TODOS OS JOGOS
-import GameTable from './GameTable'; // (ITO)
+import GameTable from './GameTable'; // ITO
 import GameChaCafe from './GameChaCafe';
 import GameMegaQuiz from './GameMegaQuiz';
 import GameWhoAmI from './GameWhoAmI';
@@ -18,7 +19,7 @@ import GameSpy from './GameSpy';
 import GameEnigma from './GameEnigma';
 
 function AppContent() {
-  const { view, selectedGame, currentPhase } = useGame();
+  const { view, selectedGame, currentPhase, roomId, nickname } = useGame();
 
   // 1. TELA DE LOGIN
   if (view === 'HOME') return <Login />;
@@ -28,37 +29,49 @@ function AppContent() {
 
   // 3. DENTRO DA SALA (JOGO)
   if (view === 'GAME') {
+    return (
+        <>
+            {/* O Jogo em si */}
+            <GameComponent selectedGame={selectedGame} currentPhase={currentPhase} />
+            
+            {/* Chat Flutuante (Só aparece se tiver roomId) */}
+            {roomId && <Chat roomId={roomId} nickname={nickname} />}
+        </>
+    );
+  }
+
+  return null;
+}
+
+// Componente auxiliar para limpar o switch/case
+function GameComponent({ selectedGame, currentPhase }) {
     // Se a fase for LOBBY, mostra a Sala de Espera Unificada
     if (currentPhase === 'LOBBY') {
         return <WaitingRoom />;
     }
 
-    // Se o jogo já começou, carrega o componente específico
     switch (selectedGame) {
-      case 'ITO': return <GameTable {...useGame()} />;
-      case 'CHA_CAFE': return <GameChaCafe {...useGame()} />;
-      case 'MEGAQUIZ': return <GameMegaQuiz {...useGame()} />;
-      case 'WHOAMI': return <GameWhoAmI {...useGame()} />;
-      case 'CODENAMES': return <GameCodenames {...useGame()} />;
-      case 'STOP': return <GameStop {...useGame()} />;
-      case 'TERMO': return <GameTermo {...useGame()} />;
-      case 'CINEMOJI': return <GameCinemoji {...useGame()} />;
-      case 'DIXIT': return <GameDixit {...useGame()} />;
-      case 'SPY': return <GameSpy {...useGame()} />;
-      case 'ENIGMA': return <GameEnigma {...useGame()} />;
+      case 'ITO': return <GameTable />;
+      case 'CHA_CAFE': return <GameChaCafe />;
+      case 'MEGAQUIZ': return <GameMegaQuiz />;
+      case 'WHOAMI': return <GameWhoAmI />;
+      case 'CODENAMES': return <GameCodenames />;
+      case 'STOP': return <GameStop />;
+      case 'TERMO': return <GameTermo />;
+      case 'CINEMOJI': return <GameCinemoji />;
+      case 'DIXIT': return <GameDixit />;
+      case 'SPY': return <GameSpy />;
+      case 'ENIGMA': return <GameEnigma />;
       default: 
         return (
             <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white">
                 <div className="text-center">
-                    <h1 className="text-2xl font-bold mb-2">Erro de Roteamento</h1>
-                    <p>O jogo "{selectedGame}" não foi encontrado no App.jsx.</p>
+                    <h1 className="text-2xl font-bold mb-2">Erro 404</h1>
+                    <p>Jogo "{selectedGame}" não encontrado.</p>
                 </div>
             </div>
         );
     }
-  }
-
-  return null;
 }
 
 export default function App() {

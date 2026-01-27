@@ -1,116 +1,235 @@
 const fs = require('fs');
 const path = require('path');
 
-// Carrega as palavras
-const wordsPath = path.join(__dirname, '../data/words_termo.json');
-let WORDS = [];
+// 1. Carregar Palavras
+let WORDS = ['TERMO', 'JOGAR', 'AMIGO', 'NOITE', 'MUNDO', 'VIVER', 'SAUDE', 'LETRA', 'MESMO', 'MUITO']; 
 try {
-    WORDS = JSON.parse(fs.readFileSync(wordsPath, 'utf8')).map(w => w.toUpperCase());
+    const wordsPath = path.join(__dirname, '../data/words_termo.json');
+    if (fs.existsSync(wordsPath)) {
+        const raw = fs.readFileSync(wordsPath, 'utf8');
+        const json = JSON.parse(raw);
+        if (Array.isArray(json)) WORDS = json.map(w => w.toUpperCase());
+    }
 } catch (e) {
-    console.error("Erro ao carregar palavras do Termo. Usando fallback.", e);
-    WORDS = ['TERMO', 'JOGAR', 'AMIGO', 'TESTE', 'SOLAR']; 
+    console.error("[TERMO] Erro ao carregar palavras:", e.message);
 }
 
-// Lógica de Cores (Verde, Amarelo, Cinza)
+// Tabela de Pontos por Tentativa (1ª a 6ª)
+const POINTS_TABLE = [0, 100, 80, 60, 40, 20, 10]; 
+
+// 2. Lógica de Cores
 function processGuess(guess, secret) {
-    const result = new Array(5).fill(null);
-    const secretArr = secret.split('');
     const guessArr = guess.split('');
+    const secretArr = secret.split('');
+    const result = new Array(5).fill(null);
 
-    // 1. Identificar VERDES (Posição correta)
-    guessArr.forEach((letter, i) => {
-        if (letter === secretArr[i]) {
-            result[i] = { letter, status: 'correct' }; // Verde
-            secretArr[i] = null; // Remove do pool
-            guessArr[i] = null;  // Marca como processado
+    // A. Verdes (Posição Certa)
+    guessArr.forEach((char, i) => {
+        if (char === secretArr[i]) {
+            result[i] = { letter: char, status: 'correct' };
+            secretArr[i] = null;
+            guessArr[i] = null;
         }
     });
 
-    // 2. Identificar AMARELOS (Posição errada) e CINZAS
-    guessArr.forEach((letter, i) => {
-        if (letter === null) return; // Já é verde
-
-        const indexInSecret = secretArr.indexOf(letter);
-        if (indexInSecret !== -1) {
-            result[i] = { letter, status: 'present' }; // Amarelo
-            secretArr[indexInSecret] = null; // Remove do pool para não repetir
+    // B. Amarelos (Posição Errada) e Cinzas
+    guessArr.forEach((char, i) => {
+        if (char === null) return; 
+        const idx = secretArr.indexOf(char);
+        if (idx !== -1) {
+            result[i] = { letter: char, status: 'present' };
+            secretArr[idx] = null;
         } else {
-            result[i] = { letter, status: 'absent' }; // Cinza
+            result[i] = { letter: char, status: 'absent' };
         }
     });
-
     return result;
 }
 
-module.exports = (io, socket, rooms, roomId) => {
-    // Evento de tentativa de palavra
-    socket.on('game_termo_guess', ({ guess }) => {
-        const room = rooms[roomId];
+module.exports = (io, socket, rooms) => {
+    
+    // Carregar Estado
+    socket.on('game_termo_load_state', () => {
+        const room = rooms[socket.data.roomId];
         if (!room || !room.state || room.gameType !== 'TERMO') return;
 
-        const word = guess.toUpperCase();
-        const userId = socket.id; // Identificador da sessão atual
+        const userId = socket.id;
+        const myGuesses = room.state.guesses[userId] || [];
+        
+        const history = myGuesses.map(g => processGuess(g, room.state.secretWord));
+        const won = myGuesses.includes(room.state.secretWord);
+        const lost = myGuesses.length >= 6 && !won;
 
-        // Validação: Palavra existe?
+        socket.emit('game_termo_my_update', {
+            history,
+            status: won ? 'WON' : (lost ? 'LOST' : 'PLAYING'),
+            secretWord: (won || lost) ? room.state.secretWord : null,
+            round: room.state.round,
+            totalScores: room.state.scores
+        });
+    });
+
+    // Jogar
+    socket.on('game_termo_guess', ({ guess }) => {
+        const roomId = socket.data.roomId;
+        const room = rooms[roomId];
+        if (!room || !room.state) return;
+
+        const word = guess.toUpperCase();
         if (!WORDS.includes(word)) {
-            socket.emit('game_termo_error', { message: 'Palavra não encontrada!' });
+            socket.emit('game_termo_error', { message: 'Palavra não existe!' });
             return;
         }
 
-        // Inicializa estado do jogador se não existir
+        const userId = socket.id;
         if (!room.state.guesses[userId]) room.state.guesses[userId] = [];
         
-        // Verifica se já acabou para este jogador
-        if (room.state.finished[userId]) return;
+        const prevGuesses = room.state.guesses[userId];
+        if (prevGuesses.includes(room.state.secretWord) || prevGuesses.length >= 6) return;
 
-        // Adiciona tentativa
         room.state.guesses[userId].push(word);
+        const attempts = room.state.guesses[userId].length;
 
-        const guessesCount = room.state.guesses[userId].length;
-        const won = word === room.state.secretWord;
-        const lost = guessesCount >= 6 && !won;
-
-        if (won) room.state.finished[userId] = 'WON';
-        if (lost) room.state.finished[userId] = 'LOST';
-
-        // Processa histórico (cores)
+        // Feedback Visual
         const history = room.state.guesses[userId].map(g => processGuess(g, room.state.secretWord));
+        const won = word === room.state.secretWord;
+        const lost = attempts >= 6 && !won;
 
-        // Envia atualização PRIVADA para quem jogou
-        socket.emit('game_termo_update_private', {
+        if (won) {
+            room.state.finished[userId] = 'WON';
+            // Adiciona Pontos (Apenas se ainda não tinha finalizado)
+            const pts = POINTS_TABLE[attempts] || 10;
+            room.state.scores[userId] = (room.state.scores[userId] || 0) + pts;
+        } 
+        else if (lost) {
+            room.state.finished[userId] = 'LOST';
+        }
+
+        socket.emit('game_termo_my_update', {
             history,
-            status: room.state.finished[userId] || 'PLAYING',
-            secretWord: (won || lost) ? room.state.secretWord : null
+            status: won ? 'WON' : (lost ? 'LOST' : 'PLAYING'),
+            secretWord: (won || lost) ? room.state.secretWord : null,
+            round: room.state.round,
+            totalScores: room.state.scores
         });
 
-        // Envia atualização PÚBLICA (Scoreboard) para todos
-        // Mostra apenas quantas tentativas cada um fez, sem revelar as palavras
-        const publicState = Object.keys(room.state.guesses).map(uid => {
-            const player = room.players.find(p => p.socketId === uid); // Busca pelo socketId
-            return {
-                nickname: player ? player.nickname : 'Desconhecido',
-                attempts: room.state.guesses[uid].length,
-                status: room.state.finished[uid] || 'PLAYING'
-            };
-        });
+        // Placar da Sala (Com pontos)
+        const scoreboard = room.players.map(p => ({
+            nickname: p.nickname,
+            attempts: (room.state.guesses[p.socketId] || []).length,
+            status: room.state.finished[p.socketId] || 'PLAYING',
+            score: room.state.scores[p.socketId] || 0
+        }));
+        
+        io.to(roomId).emit('game_termo_scoreboard', scoreboard);
+    });
 
-        io.to(roomId).emit('game_termo_scoreboard', publicState);
+    // --- CONTROLES DE RODADA ---
+
+    // Próxima Rodada (Host)
+    socket.on('game_termo_next_round', ({ roomId }) => {
+        const room = rooms[roomId];
+        // Verifica Host usando socketId
+        const player = room?.players.find(p => p.socketId === socket.id);
+        if (!room || !player || !player.isHost) return;
+
+        if (room.state.round >= 5) {
+            // FIM DE JOGO
+            endGame(io, room, roomId);
+        } else {
+            // NOVA RODADA
+            startNextRound(room);
+            
+            // Avisa a todos para atualizar estado
+            io.to(roomId).emit('game_termo_my_update', {
+                history: [],
+                status: 'PLAYING',
+                secretWord: null,
+                round: room.state.round,
+                totalScores: room.state.scores
+            });
+            
+            // Atualiza placar zerado de tentativas
+            const scoreboard = room.players.map(p => ({
+                nickname: p.nickname, attempts: 0, status: 'PLAYING', score: room.state.scores[p.socketId] || 0
+            }));
+            io.to(roomId).emit('game_termo_scoreboard', scoreboard);
+        }
+    });
+
+    // Voltar ao Lobby (Host)
+    socket.on('game_termo_back_to_lobby', ({ roomId }) => {
+        const room = rooms[roomId];
+        const player = room?.players.find(p => p.socketId === socket.id);
+        if (!room || !player || !player.isHost) return;
+
+        room.phase = 'LOBBY';
+        room.state = {}; 
+
+        io.to(roomId).emit('joined_room', {
+            roomId,
+            players: room.players,
+            gameType: 'TERMO',
+            phase: 'LOBBY'
+        });
+    });
+
+    // Reiniciar Jogo (Host)
+    socket.on('game_termo_restart', ({ roomId }) => {
+        const room = rooms[roomId];
+        const player = room?.players.find(p => p.socketId === socket.id);
+        if (!room || !player || !player.isHost) return;
+
+        const nextState = module.exports.initGame(room);
+        
+        io.to(roomId).emit('joined_room', {
+            roomId, players: room.players, gameType: 'TERMO', phase: 'PLAYING', gameData: nextState.gameData
+        });
+        
+        // Força atualização dos clientes
+        io.to(roomId).emit('game_termo_my_update', {
+            history: [], status: 'PLAYING', secretWord: null, round: 1, totalScores: room.state.scores
+        });
+        io.to(roomId).emit('game_termo_scoreboard', []);
     });
 };
 
-// Função chamada pelo server.js quando o jogo começa
+// Funções Auxiliares
+function startNextRound(room) {
+    const secretWord = WORDS[Math.floor(Math.random() * WORDS.length)];
+    room.state.round++;
+    room.state.secretWord = secretWord;
+    room.state.guesses = {};
+    room.state.finished = {};
+}
+
+function endGame(io, room, roomId) {
+    room.phase = 'GAME_OVER';
+    // Ordena vencedor
+    const sorted = [...room.players].sort((a,b) => (room.state.scores[b.socketId]||0) - (room.state.scores[a.socketId]||0));
+    const winner = sorted[0];
+
+    io.to(roomId).emit('game_over', {
+        winner,
+        results: room.players.map(p => ({...p, score: room.state.scores[p.socketId] || 0})),
+        phase: 'GAME_OVER'
+    });
+}
+
+// Inicializador
 module.exports.initGame = (room) => {
     const secretWord = WORDS[Math.floor(Math.random() * WORDS.length)];
-    console.log(`[TERMO] Sala ${room.id} iniciou. Palavra: ${secretWord}`);
-
+    
     room.state = {
         secretWord: secretWord,
-        guesses: {}, // { socketId: ['PALAVRA', ...] }
-        finished: {}, // { socketId: 'WON' | 'LOST' }
+        guesses: {}, 
+        finished: {},
+        scores: {}, // Acumulado
+        round: 1
     };
+    
+    // Zera scores
+    room.players.forEach(p => room.state.scores[p.socketId] = 0);
 
-    return {
-        gameType: 'TERMO',
-        phase: 'PLAYING'
-    };
+    return { phase: 'PLAYING' };
 };

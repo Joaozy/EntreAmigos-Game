@@ -5,7 +5,13 @@ module.exports = {
     CHA_CAFE: 'CHA_CAFE',
     CODENAMES: 'CODENAMES',
     STOP: 'STOP',
-    TERMO: 'TERMO'
+    TERMO: 'TERMO',
+    MEGAQUIZ: 'MEGAQUIZ',
+    WHOAMI: 'WHOAMI',
+    CINEMOJI: 'CINEMOJI',
+    DIXIT: 'DIXIT',
+    SPY: 'SPY',
+    ENIGMA: 'ENIGMA'
   },
   // Fases do Jogo
   PHASES: {

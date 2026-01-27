@@ -5,14 +5,10 @@ import { Palette, Check, Loader2, Trophy, Eye, Maximize2, X, Clock, AlertTriangl
 export default function GameDixit({ players, isHost, roomId, gameData, phase }) {
   const [myHand, setMyHand] = useState([]);
   const [clueInput, setClueInput] = useState('');
-  
-  // Estado para saber qual carta eu joguei
   const [myPlayedCardId, setMyPlayedCardId] = useState(null);
-
-  // Estados de Seleção e Visuais
   const [selectedCard, setSelectedCard] = useState(null);
   const [zoomedCard, setZoomedCard] = useState(null);
-  const [showScoreboard, setShowScoreboard] = useState(false); // NOVO: Controla o modal de placar
+  const [showScoreboard, setShowScoreboard] = useState(false);
   const [timeLeft, setTimeLeft] = useState(30);
 
   useEffect(() => {
@@ -22,6 +18,7 @@ export default function GameDixit({ players, isHost, roomId, gameData, phase }) 
       socket.on('dixit_hand', handleHand);
       socket.on('dixit_my_card', handleMyCard);
       
+      // Sincroniza estado ao montar (caso de refresh)
       socket.emit('dixit_sync_state', { roomId });
 
       return () => {
@@ -34,7 +31,7 @@ export default function GameDixit({ players, isHost, roomId, gameData, phase }) 
       if (phase === 'VOTING' && gameData.votingDeadline) {
           const interval = setInterval(() => {
               const seconds = Math.ceil((gameData.votingDeadline - Date.now()) / 1000);
-              setTimeLeft(seconds > 0 ? seconds : 0);
+              setTimeLeft(Math.max(0, seconds));
           }, 1000);
           return () => clearInterval(interval);
       } else {
@@ -44,9 +41,11 @@ export default function GameDixit({ players, isHost, roomId, gameData, phase }) 
 
   const narratorId = gameData.narratorId; 
   const isNarrator = narratorId === socket.id;
+  // Ajuste o caminho conforme onde você salvou as imagens no servidor/public
   const getCardUrl = (id) => `/dixit_cards/card_${id}.jpg`;
 
   const handleCardClick = (id) => {
+      if (zoomedCard) return; // Não seleciona se estiver com zoom aberto
       setSelectedCard(prev => (prev === id ? null : id));
   };
 
@@ -74,51 +73,42 @@ export default function GameDixit({ players, isHost, roomId, gameData, phase }) 
       setSelectedCard(null);
   };
 
-  // --- COMPONENTE DE ZOOM ---
+  // --- MODAIS ---
   const ZoomModal = () => {
       if (!zoomedCard) return null;
       return (
-          <div className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setZoomedCard(null)}>
-              <button className="absolute top-4 right-4 text-white hover:text-red-500 transition"><X size={40} /></button>
-              <img src={getCardUrl(zoomedCard)} className="max-h-[90vh] max-w-[90vw] rounded-lg shadow-2xl border-4 border-slate-800" alt="Zoom" />
+          <div className="fixed inset-0 z-[100] bg-black/95 flex items-center justify-center p-4 animate-in fade-in zoom-in duration-200" onClick={() => setZoomedCard(null)}>
+              <button className="absolute top-4 right-4 text-white hover:text-red-500 transition bg-black/50 rounded-full p-2"><X size={32} /></button>
+              <img src={getCardUrl(zoomedCard)} className="max-h-[85vh] max-w-[95vw] rounded-lg shadow-2xl border-2 border-slate-700 object-contain" alt="Zoom" />
           </div>
       );
   };
 
-  // --- NOVO: MODAL DE PLACAR ---
   const ScoreboardModal = () => {
       if (!showScoreboard) return null;
       return (
-          <div className="fixed inset-0 z-[90] bg-black/80 flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setShowScoreboard(false)}>
-              <div className="bg-slate-800 p-6 rounded-3xl border border-slate-700 shadow-2xl w-full max-w-md relative overflow-hidden" onClick={e => e.stopPropagation()}>
-                   {/* Botão Fechar */}
-                   <button className="absolute top-4 right-4 text-slate-400 hover:text-white transition" onClick={() => setShowScoreboard(false)}>
+          <div className="fixed inset-0 z-[90] bg-black/80 flex items-center justify-center p-4 animate-in fade-in" onClick={() => setShowScoreboard(false)}>
+              <div className="bg-slate-800 p-6 rounded-3xl border border-slate-600 shadow-2xl w-full max-w-md relative" onClick={e => e.stopPropagation()}>
+                   <button className="absolute top-4 right-4 text-slate-400 hover:text-white" onClick={() => setShowScoreboard(false)}>
                       <X size={24} />
                    </button>
-
                    <div className="flex justify-between items-end mb-6 border-b border-slate-700 pb-4">
                        <h3 className="text-white text-xl font-black uppercase flex items-center gap-2">
                            <Trophy className="text-yellow-400" /> PLACAR
                        </h3>
                        <span className="text-pink-500 text-xs font-bold uppercase bg-pink-900/30 px-2 py-1 rounded">Meta: {gameData.targetScore || 30} Pts</span>
                    </div>
-                   
                    <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
                        {players.sort((a,b) => (gameData.scores[b.id]||0) - (gameData.scores[a.id]||0)).map((p, index) => {
                            const score = gameData.scores[p.id] || 0;
                            const target = gameData.targetScore || 30;
                            const percentage = Math.min((score / target) * 100, 100);
-
                            return (
                                <div key={p.id} className="relative group">
-                                   {/* Barra de Progresso Fundo */}
                                    <div className="absolute left-0 top-0 h-full bg-indigo-900/40 rounded-xl transition-all duration-500" style={{width: `${percentage}%`}}></div>
-                                   
                                    <div className={`relative flex justify-between items-center p-3 rounded-xl border ${p.id === socket.id ? 'border-indigo-500/50 bg-indigo-900/10' : 'border-transparent'}`}>
                                        <div className="flex items-center gap-3">
-                                           <span className={`font-mono font-bold w-6 text-center ${index === 0 ? 'text-yellow-400 text-lg' : 'text-slate-500'}`}>
-                                               {index === 0 ? '👑' : `${index + 1}.`}
-                                           </span>
+                                           <span className={`font-mono font-bold w-6 text-center ${index === 0 ? 'text-yellow-400 text-lg' : 'text-slate-500'}`}>{index === 0 ? '👑' : `${index + 1}.`}</span>
                                            <span className="font-bold z-10 text-white truncate max-w-[150px]">{p.nickname}</span>
                                            {p.id === gameData.narratorId && <span className="text-[9px] bg-pink-600 px-1.5 py-0.5 rounded text-white font-bold z-10 tracking-wider">NARRADOR</span>}
                                        </div>
@@ -133,65 +123,50 @@ export default function GameDixit({ players, isHost, roomId, gameData, phase }) 
       );
   };
 
-  // --- COMPONENTE CARTA ---
   const Card = ({ id, onClick, isSelected, disabled, label, showOwner, isNarratorMark, isMine, size = "normal" }) => {
       const [imgError, setImgError] = useState(false);
-      
       const cardData = gameData.tableCards?.find(tc => tc.id === id);
       const ownerId = showOwner ? (cardData?.ownerId) : null;
       const owner = players.find(p => p.id === ownerId);
-      
       const sizeClasses = size === "small" ? "w-20 md:w-28" : "w-32 md:w-48";
 
-      useEffect(() => { setImgError(false); }, [id]);
-
       return (
-        <div className={`relative group ${sizeClasses} aspect-[2/3] flex-shrink-0`}>
+        <div className={`relative group ${sizeClasses} aspect-[2/3] flex-shrink-0 transition-transform duration-200 ${isSelected ? 'scale-105 z-10' : 'hover:scale-105 hover:z-10'}`}>
             <div 
                 onClick={() => !disabled && !isMine && onClick && onClick(id)}
-                className={`w-full h-full rounded-xl overflow-hidden transition-all duration-200 shadow-lg cursor-pointer flex flex-col
-                ${isSelected ? 'ring-4 ring-yellow-400 scale-105 -translate-y-2 z-10' : ''}
-                ${!isSelected && !disabled && !isMine ? 'hover:scale-105 hover:z-10' : ''}
-                ${disabled || isMine ? 'opacity-100 cursor-default' : ''}
+                className={`w-full h-full rounded-xl overflow-hidden shadow-lg cursor-pointer flex flex-col bg-slate-800 relative
+                ${isSelected ? 'ring-4 ring-yellow-400' : ''}
                 ${isMine ? 'ring-4 ring-indigo-500' : ''}
-                bg-slate-800 relative
+                ${disabled && !isSelected ? 'grayscale opacity-80 cursor-default' : ''}
                 `}
             >
-                {id ? (
-                    !imgError ? (
-                        <img 
-                            src={getCardUrl(id)} 
-                            onError={() => { console.warn(`Falha ao carregar carta ${id}`); setImgError(true); }}
-                            alt={`Carta ${id}`} 
-                            className={`w-full h-full object-cover transition-opacity duration-300 ${(disabled || isMine) && phase === 'VOTING' && !isSelected ? 'grayscale-[0.5]' : ''}`} 
-                            loading="lazy" 
-                        />
-                    ) : (
-                        <div className="w-full h-full bg-slate-800 flex flex-col items-center justify-center p-2 text-center border-2 border-slate-700">
-                            <AlertTriangle className="text-red-500 mb-2" size={24} />
-                            <span className="text-slate-400 text-[10px] font-bold">ERRO #{id}</span>
-                        </div>
-                    )
+                {id && !imgError ? (
+                    <img 
+                        src={getCardUrl(id)} 
+                        onError={() => setImgError(true)}
+                        alt={`Carta ${id}`} 
+                        className="w-full h-full object-cover" 
+                        loading="lazy" 
+                    />
                 ) : (
-                    <div className="w-full h-full bg-indigo-900/50 flex items-center justify-center text-indigo-300 font-bold text-2xl">?</div>
+                    <div className="w-full h-full flex items-center justify-center bg-slate-700 text-slate-500 font-bold text-xs p-2 text-center">
+                        {imgError ? "Erro Imagem" : "?"}
+                    </div>
                 )}
                 
-                {isSelected && <div className="absolute inset-0 bg-yellow-500/20 flex items-center justify-center z-20"><Check className="text-yellow-400 w-12 h-12 drop-shadow-lg"/></div>}
-                {label && <div className="absolute bottom-0 w-full bg-black/70 text-white text-xs font-bold py-1 text-center backdrop-blur-sm z-20">{label}</div>}
+                {isSelected && <div className="absolute inset-0 bg-yellow-500/20 flex items-center justify-center z-20"><Check className="text-yellow-400 w-12 h-12 drop-shadow-md"/></div>}
+                {label && <div className="absolute bottom-0 w-full bg-black/80 text-white text-xs font-bold py-1 text-center backdrop-blur-sm z-20">{label}</div>}
                 {isMine && <div className="absolute bottom-0 w-full bg-indigo-600 text-white text-xs font-bold py-1 text-center shadow-lg z-20 uppercase tracking-wider">SUA CARTA</div>}
-
                 {showOwner && (
                     <div className={`absolute top-0 w-full text-white text-xs font-bold py-1 text-center truncate px-1 shadow-sm z-20 ${isNarratorMark ? 'bg-pink-600' : 'bg-indigo-600'}`}>
-                        {isNarratorMark && "★ "} {owner ? owner.nickname : "Desconhecido"}
+                        {isNarratorMark && "★ "} {owner ? owner.nickname : "..."}
                     </div>
                 )}
             </div>
-
             {id && !imgError && (
                 <button 
                     onClick={(e) => { e.stopPropagation(); setZoomedCard(id); }}
-                    className="absolute top-2 right-2 bg-black/50 hover:bg-black/80 text-white p-1.5 rounded-full backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity z-30"
-                    title="Dar Zoom"
+                    className="absolute top-2 right-2 bg-black/60 hover:bg-black/90 text-white p-1.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity z-30"
                 >
                     <Maximize2 size={16} />
                 </button>
@@ -200,47 +175,55 @@ export default function GameDixit({ players, isHost, roomId, gameData, phase }) 
       );
   };
 
-  // --- RENDERIZADORES ---
-  const renderPhaseContent = () => {
-      // 1. NARRADOR
-      if (phase === 'NARRATOR') {
-          return (
-              <div className="flex flex-col items-center animate-in fade-in w-full max-w-lg">
+  return (
+      <div className="min-h-screen bg-slate-900 text-white p-4 flex flex-col items-center">
+          <ZoomModal />
+          <ScoreboardModal />
+          
+          {phase !== 'SCORING' && phase !== 'VICTORY' && (
+              <button 
+                onClick={() => setShowScoreboard(true)}
+                className="fixed top-20 right-4 z-[40] bg-slate-800/90 hover:bg-slate-700 text-yellow-400 p-3 rounded-full backdrop-blur-md shadow-xl border border-slate-700 transition-all hover:scale-110 flex items-center justify-center"
+              >
+                <Trophy size={22}/>
+              </button>
+          )}
+
+          {/* FASE 1: NARRADOR */}
+          {phase === 'NARRATOR' && (
+              <div className="flex flex-col items-center animate-in fade-in w-full max-w-lg mt-10">
                   <h1 className="text-3xl font-black text-pink-500 mb-8 flex items-center gap-2"><Palette /> IMAGINÁRIO</h1>
                   {isNarrator ? (
                       <div className="w-full bg-slate-800 p-6 rounded-2xl shadow-xl border border-pink-500/30">
                           <h2 className="text-xl font-bold mb-2 text-white text-center">VOCÊ É O NARRADOR!</h2>
-                          <p className="text-slate-400 text-sm mb-4 text-center">1. Selecione uma carta da sua mão.<br/>2. Escreva uma dica.</p>
-                          <input className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white outline-none focus:border-pink-500 transition mb-4" placeholder="Dica..." value={clueInput} onChange={e => setClueInput(e.target.value)} maxLength={50} autoFocus />
-                          <button onClick={submitClue} disabled={!selectedCard || !clueInput.trim()} className="bg-pink-600 hover:bg-pink-500 disabled:bg-slate-700 text-white font-bold py-3 px-8 rounded-xl w-full">CONFIRMAR</button>
+                          <p className="text-slate-400 text-sm mb-4 text-center">Escolha uma carta e dê uma dica.</p>
+                          <input className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-white outline-none focus:border-pink-500 transition mb-4" placeholder="Escreva sua dica aqui..." value={clueInput} onChange={e => setClueInput(e.target.value)} maxLength={50} autoFocus />
+                          <button onClick={submitClue} disabled={!selectedCard || !clueInput.trim()} className="bg-pink-600 hover:bg-pink-500 disabled:bg-slate-700 text-white font-bold py-3 px-8 rounded-xl w-full transition">CONFIRMAR</button>
                       </div>
                   ) : (
-                      <div className="text-center mt-10">
+                      <div className="text-center mt-10 p-8 bg-slate-800/50 rounded-2xl">
                           <Loader2 size={40} className="text-pink-500 animate-spin mx-auto mb-4"/>
                           <h2 className="text-2xl font-bold">Aguardando Narrador...</h2>
-                          <p className="text-slate-400 mt-2"><b>{players.find(p => p.id === narratorId)?.nickname || "Alguém"}</b> está pensando.</p>
+                          <p className="text-slate-400 mt-2"><b>{players.find(p => p.id === narratorId)?.nickname || "..."}</b> está pensando.</p>
                       </div>
                   )}
               </div>
-          );
-      }
+          )}
 
-      // 2. PLAYS
-      if (phase === 'PLAYS') {
-          const hasPlayed = gameData.tableCards?.some(c => c.ownerId === socket.id);
-          return (
-              <div className="flex flex-col items-center animate-in fade-in">
-                  <div className="bg-pink-900/50 px-8 py-6 rounded-3xl border border-pink-500/30 mb-8 text-center shadow-xl">
-                      <span className="text-pink-300 text-xs font-bold uppercase tracking-widest">A DICA É</span>
-                      <h2 className="text-2xl md:text-4xl font-black text-white mt-2">"{gameData.clue}"</h2>
+          {/* FASE 2: JOGADAS */}
+          {phase === 'PLAYS' && (
+              <div className="flex flex-col items-center animate-in fade-in w-full mt-10">
+                  <div className="bg-pink-900/50 px-10 py-6 rounded-3xl border-2 border-pink-500/30 mb-8 text-center shadow-[0_0_30px_rgba(236,72,153,0.2)]">
+                      <span className="text-pink-300 text-xs font-bold uppercase tracking-widest block mb-2">A DICA É</span>
+                      <h2 className="text-3xl md:text-5xl font-black text-white italic">"{gameData.clue}"</h2>
                   </div>
                   {!isNarrator ? (
-                      !hasPlayed ? (
+                      !gameData.tableCards?.some(c => c.ownerId === socket.id) ? (
                           <div className="text-center">
-                              <p className="text-slate-300 mb-6 font-bold text-lg">Escolha uma carta da sua mão que combine.</p>
-                              <button onClick={playCard} disabled={!selectedCard} className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 text-white font-bold py-4 px-12 rounded-full shadow-xl transition-all hover:scale-105">CONFIRMAR CARTA</button>
+                              <p className="text-slate-300 mb-6 font-bold text-lg animate-pulse">Escolha uma carta da sua mão que combine com a dica.</p>
+                              <button onClick={playCard} disabled={!selectedCard} className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white font-bold py-4 px-12 rounded-full shadow-xl transition-all hover:scale-105 active:scale-95">CONFIRMAR CARTA</button>
                           </div>
-                      ) : <div className="text-center"><Check className="w-16 h-16 text-emerald-500 mx-auto mb-4"/><h3 className="text-xl font-bold">Aguardando os outros...</h3></div>
+                      ) : <div className="text-center p-6 bg-emerald-900/20 rounded-2xl border border-emerald-500/50"><Check className="w-12 h-12 text-emerald-500 mx-auto mb-2"/><h3 className="text-xl font-bold text-emerald-400">Carta Enviada!</h3><p className="text-slate-400 text-sm">Aguardando os outros jogadores...</p></div>
                   ) : (
                       <div className="text-center">
                           <p className="text-slate-400 font-bold mb-4">Esperando cartas falsas...</p>
@@ -252,40 +235,32 @@ export default function GameDixit({ players, isHost, roomId, gameData, phase }) 
                       </div>
                   )}
               </div>
-          );
-      }
+          )}
 
-      // 3. VOTING
-      if (phase === 'VOTING') {
-          const myVote = gameData.votes ? gameData.votes[socket.id] : null;
-          return (
-              <div className="flex flex-col items-center w-full animate-in fade-in pb-32">
+          {/* FASE 3: VOTAÇÃO */}
+          {phase === 'VOTING' && (
+              <div className="flex flex-col items-center w-full animate-in fade-in pb-32 mt-6">
                   <div className="mb-6 text-center w-full">
                       <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full font-mono font-bold text-xl mb-4 ${timeLeft <= 10 ? 'bg-red-900/50 text-red-400 animate-pulse' : 'bg-slate-800 text-slate-300'}`}>
                           <Clock size={20} /> 00:{timeLeft < 10 ? `0${timeLeft}` : timeLeft}
                       </div>
-
                       <h2 className="text-3xl font-black text-white mb-2">"{gameData.clue}"</h2>
-                      
-                      {!isNarrator && !myVote && (
-                          <div className="space-y-2">
-                              <p className="text-emerald-400 font-bold">Qual é a carta do Narrador?</p>
-                              <p className="text-slate-400 text-xs">(Clique para votar. Você não pode votar na sua.)</p>
-                          </div>
+                      {!isNarrator && !gameData.votes?.[socket.id] && (
+                          <p className="text-emerald-400 font-bold animate-bounce">Qual é a carta do Narrador?</p>
                       )}
-                      {isNarrator && <p className="text-slate-400 font-bold">Aguardando votos...</p>}
+                      {isNarrator && <p className="text-slate-400 font-bold">Acompanhe a votação...</p>}
                   </div>
 
                   <div className="flex flex-wrap justify-center gap-4 mb-8 w-full max-w-6xl">
                       {gameData.tableCards?.map(card => {
-                          const isVotedByMe = myVote === card.id;
+                          const isVotedByMe = gameData.votes?.[socket.id] === card.id;
                           const isMine = card.id === myPlayedCardId;
                           const isSelected = isVotedByMe || (selectedCard === card.id);
                           
                           return <Card 
                             key={card.id} 
                             id={card.id} 
-                            disabled={isNarrator || !!myVote || isMine} 
+                            disabled={isNarrator || !!gameData.votes?.[socket.id] || isMine} 
                             onClick={handleCardClick} 
                             isSelected={isSelected} 
                             isMine={isMine} 
@@ -294,8 +269,8 @@ export default function GameDixit({ players, isHost, roomId, gameData, phase }) 
                       })}
                   </div>
 
-                  {!isNarrator && !myVote && (
-                      <div className="fixed bottom-24 md:bottom-32 left-0 w-full flex justify-center z-40 px-4 pointer-events-none">
+                  {!isNarrator && !gameData.votes?.[socket.id] && (
+                      <div className="fixed bottom-32 left-0 w-full flex justify-center z-40 px-4 pointer-events-none">
                           <button 
                             onClick={confirmVote} 
                             disabled={!selectedCard} 
@@ -306,94 +281,46 @@ export default function GameDixit({ players, isHost, roomId, gameData, phase }) 
                       </div>
                   )}
               </div>
-          );
-      }
+          )}
 
-      // 4. RESULTADO
-      if (phase === 'SCORING' || phase === 'VICTORY') {
-          const isVictory = phase === 'VICTORY';
-          return (
-              <div className="flex flex-col items-center w-full animate-in fade-in">
+          {/* FASE 4: RESULTADO */}
+          {(phase === 'SCORING' || phase === 'VICTORY') && (
+              <div className="flex flex-col items-center w-full animate-in fade-in mt-6">
                    <h1 className="text-4xl font-black text-yellow-400 mb-6 flex items-center gap-2">
-                       <Trophy /> {isVictory ? "VENCEDOR!" : "RESULTADO"}
+                       <Trophy /> {phase === 'VICTORY' ? "VENCEDOR!" : "RESULTADO"}
                    </h1>
-                   
                    <div className="flex flex-wrap justify-center gap-6 mb-8 w-full max-w-6xl">
                       {gameData.tableCards?.map(card => {
                           const isNarratorCard = card.ownerId === narratorId;
                           return <Card key={card.id} id={card.id} showOwner={true} isNarratorMark={isNarratorCard} disabled={true} />;
                       })}
                    </div>
-                   
-                   {/* Aqui eu mostro o placar na fase de scoring normalmente */}
+                   {/* Placar Inline */}
                    <div className="w-full max-w-md bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-xl mb-32">
-                        {/* Reuso a lógica interna do ScoreboardModal aqui para consistência */}
-                       <div className="flex justify-between items-end mb-4 border-b border-slate-700 pb-2">
-                           <h3 className="text-slate-400 text-xs font-bold uppercase">Placar da Rodada</h3>
-                           <span className="text-pink-500 text-xs font-bold uppercase">Meta: {gameData.targetScore || 30} Pts</span>
+                       <h3 className="text-white font-bold text-center mb-4 uppercase tracking-widest">Pontuação da Rodada</h3>
+                       <div className="space-y-3">
+                           {players.sort((a,b) => (gameData.scores[b.id]||0) - (gameData.scores[a.id]||0)).slice(0, 5).map((p, i) => (
+                               <div key={p.id} className="flex justify-between items-center bg-slate-900/50 p-3 rounded-lg">
+                                   <span className="font-bold text-slate-300">{i+1}. {p.nickname}</span>
+                                   <span className="font-black text-yellow-400">+{gameData.roundScores?.[p.id] || 0} pts</span>
+                               </div>
+                           ))}
                        </div>
-                       
-                       <div className="space-y-4">
-                           {players.sort((a,b) => (gameData.scores[b.id]||0) - (gameData.scores[a.id]||0)).map((p, index) => {
-                               const score = gameData.scores[p.id] || 0;
-                               const target = gameData.targetScore || 30;
-                               const percentage = Math.min((score / target) * 100, 100);
-                               const isWinner = isVictory && index === 0;
-
-                               return (
-                                   <div key={p.id} className="relative">
-                                       <div className="absolute left-0 top-0 h-full bg-indigo-900/30 rounded-lg transition-all duration-1000" style={{width: `${percentage}%`}}></div>
-                                       <div className={`relative flex justify-between items-center p-3 rounded-lg border ${p.id === socket.id ? 'border-indigo-500/50 bg-indigo-900/20' : 'border-transparent'} ${isWinner ? 'ring-2 ring-yellow-400 bg-yellow-900/20' : ''}`}>
-                                           <div className="flex items-center gap-3">
-                                               <span className="font-mono text-slate-500 font-bold w-4">{index + 1}.</span>
-                                               <span className="font-bold z-10">{p.nickname}</span>
-                                               {p.id === narratorId && <span className="text-[10px] bg-pink-600 px-1 rounded text-white z-10">NARRADOR</span>}
-                                               {isWinner && <Trophy size={14} className="text-yellow-400"/>}
-                                           </div>
-                                           <span className="text-yellow-400 font-black text-lg z-10">{score}</span>
-                                       </div>
-                                   </div>
-                               );
-                           })}
-                       </div>
-                       
-                       {isHost && !isVictory && (
-                            <button onClick={nextRound} className="w-full mt-6 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 rounded-xl shadow-lg transition flex items-center justify-center gap-2">
+                       {isHost && phase !== 'VICTORY' && (
+                            <button onClick={nextRound} className="w-full mt-6 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 rounded-xl shadow-lg transition flex items-center justify-center gap-2 animate-bounce">
                                 PRÓXIMA RODADA <Eye size={16}/>
                             </button>
                        )}
-                       {isVictory && <div className="mt-6 text-center text-slate-400 text-sm">Jogo finalizado! O host pode reiniciar.</div>}
                    </div>
               </div>
-          );
-      }
-      return <div className="text-center mt-20"><Loader2 className="animate-spin text-pink-500 mx-auto"/> Carregando...</div>;
-  };
-
-  return (
-      <div className="min-h-screen bg-slate-900 text-white p-4 flex flex-col items-center">
-          <ZoomModal />
-          <ScoreboardModal />
-          
-          {/* BOTÃO FLUTUANTE DE PLACAR (Canto Superior Direito) */}
-          {/* Só mostra se não estiver na fase de Scoring/Victory (pois lá já mostra o placar grande) */}
-          {phase !== 'SCORING' && phase !== 'VICTORY' && (
-              <button 
-                onClick={() => setShowScoreboard(true)}
-                className="fixed top-20 right-4 z-[40] bg-slate-800/90 hover:bg-slate-700 text-yellow-400 p-3 rounded-full backdrop-blur-md shadow-xl border border-slate-700 transition-all hover:scale-110 flex items-center justify-center group"
-                title="Ver Placar"
-              >
-                <Trophy size={22} className="group-hover:rotate-12 transition-transform"/>
-              </button>
           )}
 
-          {renderPhaseContent()}
-
+          {/* MÃO DO JOGADOR (Fixo embaixo) */}
           {phase !== 'VOTING' && phase !== 'SCORING' && phase !== 'VICTORY' && (
-            <div className="fixed bottom-0 left-0 w-full bg-slate-950/95 border-t border-slate-800 p-2 z-50 backdrop-blur-md pb-4 safe-area-bottom">
+            <div className="fixed bottom-0 left-0 w-full bg-slate-950/90 border-t border-slate-800 p-2 z-50 backdrop-blur-md pb-6">
                 <div className="max-w-6xl mx-auto flex flex-col gap-1">
-                    <p className="text-slate-500 text-[10px] font-bold uppercase text-center tracking-widest">SUAS CARTAS</p>
-                    <div className="flex justify-center gap-2 overflow-x-auto pb-2 px-4 no-scrollbar min-h-[100px] items-center">
+                    <p className="text-slate-500 text-[10px] font-bold uppercase text-center tracking-widest mb-1">SUAS CARTAS</p>
+                    <div className="flex justify-center gap-3 overflow-x-auto pb-2 px-4 no-scrollbar min-h-[120px] items-center">
                         {myHand.length > 0 ? myHand.map(id => (
                             <Card 
                                 key={id} id={id} 
@@ -402,7 +329,7 @@ export default function GameDixit({ players, isHost, roomId, gameData, phase }) 
                                 disabled={phase === 'VOTING' || phase === 'SCORING' || (phase === 'PLAYS' && isNarrator) || phase === 'VICTORY'} 
                                 size="small"
                             />
-                        )) : <div className="text-slate-600 text-sm italic">Distribuindo...</div>}
+                        )) : <div className="text-slate-500 text-xs font-bold animate-pulse">Distribuindo cartas...</div>}
                     </div>
                 </div>
             </div>

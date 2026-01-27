@@ -9,14 +9,13 @@ export const GameProvider = ({ children }) => {
     // --- ESTADOS ---
     const [view, setView] = useState('HOME');
     const [isConnected, setIsConnected] = useState(socket.connected);
-    const [user, setUser] = useState(null); // Usuário Supabase + Profile
+    const [user, setUser] = useState(null); 
     
     // Game States
     const [roomId, setRoomId] = useState('');
     const [isHost, setIsHost] = useState(false);
     const [players, setPlayers] = useState([]);
-    const [selectedGame, setSelectedGame] = useState('ITO');
-    const [gameType, setGameType] = useState(null);
+    const [selectedGame, setSelectedGame] = useState(null);
     const [gameData, setGameData] = useState({});
     const [currentPhase, setCurrentPhase] = useState('LOBBY');
     const [mySecret, setMySecret] = useState(null);
@@ -25,17 +24,15 @@ export const GameProvider = ({ children }) => {
 
     // --- 1. MONITORAMENTO DE SESSÃO (SUPABASE) ---
     useEffect(() => {
-        // Verifica sessão atual
         const checkSession = async () => {
             const { data: { session } } = await supabase.auth.getSession();
-            if (session) fetchProfile(session.user.id);
+            if (session) fetchProfile(session.user.id, session.user.email);
         };
         checkSession();
 
-        // Escuta mudanças (Login/Logout)
         const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
             if (session) {
-                await fetchProfile(session.user.id);
+                await fetchProfile(session.user.id, session.user.email);
             } else {
                 setUser(null);
                 setView('HOME');
@@ -46,67 +43,80 @@ export const GameProvider = ({ children }) => {
         return () => subscription.unsubscribe();
     }, []);
 
-    const fetchProfile = async (userId) => {
+    const fetchProfile = async (userId, userEmail) => {
         try {
-            const { data, error } = await supabase
+            // 1. Tenta buscar o perfil existente
+            let { data, error } = await supabase
                 .from('profiles')
                 .select('*')
                 .eq('id', userId)
-                .single();
+                .maybeSingle(); // Use maybeSingle para não dar erro 406 se não achar
+            
+            // 2. CORREÇÃO: Se não existir perfil, cria um automaticamente (Auto-Healing)
+            if (!data) {
+                console.log("Perfil não encontrado. Criando automaticamente...");
+                const randomNick = "Jogador" + Math.floor(Math.random() * 1000);
+                const { data: newData, error: insertError } = await supabase
+                    .from('profiles')
+                    .insert([{ id: userId, nickname: randomNick }])
+                    .select()
+                    .single();
+                
+                if (insertError) {
+                    console.error("Erro ao criar perfil automático:", insertError);
+                    return;
+                }
+                data = newData;
+            }
             
             if (data) {
-                const completeUser = { ...data, email: 'user@app.com' }; // Email vem da session, mas aqui simplificamos
+                const completeUser = { ...data, email: userEmail };
                 setUser(completeUser);
-                setView('LOBBY');
+                setView('LOBBY'); // <--- ISSO TIRA VOCÊ DA TELA DE LOGIN
                 
-                // Conecta no Socket com o ID real
                 if(socket.connected) socket.emit('identify', { userId: completeUser.id, nickname: completeUser.nickname });
             }
-        } catch (error) { console.error("Erro perfil:", error); }
+        } catch (error) { 
+            console.error("Erro crítico no perfil:", error); 
+        }
     };
 
     // --- 2. SOCKET LISTENERS ---
     useEffect(() => {
         const onConnect = () => {
             setIsConnected(true);
-            if (user) socket.emit('identify', { userId: user.id, nickname: user.nickname });
-            
-            // Tenta rejoin
-            const savedRoom = localStorage.getItem('saved_roomId');
-            if (savedRoom && user) {
-                socket.emit('rejoin_room', { roomId: savedRoom, userId: user.id });
+            if (user) {
+                socket.emit('identify', { userId: user.id, nickname: user.nickname });
+                
+                // Tenta reconectar se caiu
+                const savedRoom = localStorage.getItem('saved_roomId');
+                if (savedRoom) socket.emit('rejoin_room', { roomId: savedRoom, userId: user.id });
             }
         };
 
+        const onDisconnect = () => setIsConnected(false);
+
         const onJoinedRoom = (data) => {
+            console.log("Joined Room:", data);
             setRoomId(data.roomId);
-            setPlayers(data.players);
+            setPlayers(data.players || []);
             
-            // ATENÇÃO: Se o servidor mandar o gameType, usamos ele (quem entra).
-            // Se não mandar (quem cria), usamos o selectedGame local.
             if (data.gameType) setSelectedGame(data.gameType);
+            if (data.gameData) setGameData(data.gameData);
             
-            if(data.gameData) setGameData(data.gameData);
-            if(data.mySecretNumber) setMySecret(data.mySecretNumber);
-            
-            // Verifica Host
             if(user && data.players) {
                 const me = data.players.find(p => p.userId === user.id);
                 setIsHost(me?.isHost || false);
             }
 
             localStorage.setItem('saved_roomId', data.roomId);
-
-            // CORREÇÃO CRÍTICA: Sempre vai para a view 'GAME' se entrou na sala.
-            // A WaitingRoom vai lidar com a fase 'LOBBY'.
             setCurrentPhase(data.phase);
             setView('GAME'); 
-            
             setIsJoining(false);
         };
 
         socket.on('connect', onConnect);
-        socket.on('disconnect', () => setIsConnected(false));
+        socket.on('disconnect', onDisconnect);
         socket.on('joined_room', onJoinedRoom);
         
         socket.on('update_players', (list) => {
@@ -115,51 +125,41 @@ export const GameProvider = ({ children }) => {
             if(me) setIsHost(me.isHost);
         });
 
-        socket.on('game_started', (data) => {
-            setGameType(data.gameType);
-            setGameData(data.gameData);
-            setCurrentPhase(data.phase);
-            setView('GAME');
-        });
-
         socket.on('update_game_data', ({gameData, phase}) => {
-            setGameData(gameData);
+            setGameData(prev => ({...prev, ...gameData}));
             if(phase) setCurrentPhase(phase);
         });
 
         socket.on('game_over', (data) => {
-             if (data.results) { setGameResult(data); setPlayers(data.results); setCurrentPhase('REVEAL'); }
-             else { setCurrentPhase(data.phase || 'VICTORY'); setGameData(prev => ({...prev, ...data.gameData})); }
+             if (data.results) setGameResult(data);
+             if (data.phase) setCurrentPhase(data.phase);
+             if (data.gameData) setGameData(prev => ({...prev, ...data.gameData}));
         });
 
         socket.on('your_secret_number', setMySecret);
-        socket.on('your_character', (c) => setPlayers(prev => prev.map(p => p.userId === user?.id ? {...p, character:c}:p)));
         
-        socket.on('returned_to_lobby', () => {
-            setCurrentPhase('LOBBY');
-            setView('LOBBY');
-            setGameData({});
+        socket.on('error_msg', (msg) => { 
+            alert(msg); 
+            setIsJoining(false); 
         });
-
-        socket.on('error_msg', (msg) => { alert(msg); setIsJoining(false); });
-        socket.on('kicked', () => { sairDoJogo(); alert("Removido."); });
 
         return () => { 
             socket.off('connect', onConnect);
+            socket.off('disconnect', onDisconnect);
             socket.off('joined_room', onJoinedRoom);
             socket.off('update_players');
-            socket.off('game_started');
             socket.off('update_game_data');
             socket.off('game_over');
-            socket.off('returned_to_lobby');
+            socket.off('your_secret_number');
+            socket.off('error_msg');
         };
     }, [user]);
 
     // --- AÇÕES ---
     const criarSala = () => {
-        if(!user) return;
+        if(!user || !selectedGame) return;
         setIsJoining(true);
-        socket.emit('create_room', { nickname: user.nickname, gameType: selectedGame, userId: user.id });
+        socket.emit('create_room', { nickname: user.nickname, gameId: selectedGame, userId: user.id });
     };
 
     const entrarSala = () => {
@@ -170,22 +170,26 @@ export const GameProvider = ({ children }) => {
 
     const sairDoJogo = () => {
         localStorage.removeItem('saved_roomId');
-        setRoomId(''); setPlayers([]); setGameData({});
-        setView('DASHBOARD'); // Volta para o Menu Principal
+        setRoomId(''); 
+        setPlayers([]); 
+        setGameData({});
+        setView('LOBBY'); 
+        socket.emit('leave_room'); 
     };
 
     const logout = async () => {
         await supabase.auth.signOut();
         setView('HOME');
+        setUser(null);
     };
 
     return (
         <GameContext.Provider value={{
             view, setView, isConnected, user,
             players, isHost, roomId, setRoomId, selectedGame, setSelectedGame,
-            gameType, gameData, currentPhase, mySecret, gameResult, isJoining,
+            gameData, currentPhase, mySecret, gameResult, isJoining,
             criarSala, entrarSala, sairDoJogo, logout,
-            myUserId: user?.id, nickname: user?.nickname, myStats: { wins: user?.wins || 0 },
+            myUserId: user?.id, nickname: user?.nickname,
             socket
         }}>
             {children}

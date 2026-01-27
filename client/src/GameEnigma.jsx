@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { socket } from './socket';
-import { Search, Send, Lock, Unlock, Trophy, ArrowRight, Loader2, Clock } from 'lucide-react';
+import { Search, Send, Lock, Unlock, Trophy, ArrowRight, Loader2, Clock, CheckCircle } from 'lucide-react';
 
 export default function GameEnigma({ players, isHost, roomId, gameData, phase }) {
   const [guess, setGuess] = useState('');
@@ -11,11 +11,12 @@ export default function GameEnigma({ players, isHost, roomId, gameData, phase })
     if (scrollRef.current) {
         scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [gameData?.clues?.length]);
+  }, [gameData?.clues?.length, phase]);
 
   useEffect(() => {
       const handleWrong = () => {
           setShake(true);
+          setGuess('');
           setTimeout(() => setShake(false), 500);
       };
       socket.on('enigma_wrong', handleWrong);
@@ -26,133 +27,128 @@ export default function GameEnigma({ players, isHost, roomId, gameData, phase })
       e.preventDefault();
       if(guess.trim()) {
           socket.emit('enigma_guess', { roomId, guess });
-          setGuess('');
       }
   };
 
   const nextClue = () => socket.emit('enigma_next_clue', { roomId });
 
-  if (!gameData || !gameData.clues) return <div className="text-center mt-20 text-white"><Loader2 className="animate-spin mx-auto"/> Carregando Enigma...</div>;
+  if (!gameData || !gameData.clues) return <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white gap-2"><Loader2 className="animate-spin text-emerald-500"/> Carregando Mistério...</div>;
 
   const isLocked = gameData.lockedPlayers?.includes(socket.id);
   const clues = gameData.clues || [];
 
   return (
     <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center p-4">
-        
         {/* HEADER */}
         <div className="w-full max-w-2xl flex justify-between items-center mb-6 bg-slate-800 p-4 rounded-xl shadow-lg border-b-4 border-emerald-600">
             <h1 className="text-2xl font-black text-emerald-400 flex items-center gap-2 tracking-tighter">
                 <Search strokeWidth={3} /> ENIGMA
             </h1>
             <div className="text-right">
-                <p className="text-[10px] text-slate-400 font-bold uppercase">VALENDO</p>
+                <p className="text-[10px] text-slate-400 font-bold uppercase">VALE</p>
                 <p className="font-mono text-2xl font-bold text-yellow-400">{gameData.currentValue} pts</p>
             </div>
         </div>
 
         {/* ÁREA DE PISTAS */}
-        <div className="flex-1 w-full max-w-2xl flex flex-col overflow-hidden mb-4">
+        <div className="flex-1 w-full max-w-2xl flex flex-col overflow-hidden mb-4 relative">
             <div 
                 ref={scrollRef}
-                className="flex-1 bg-slate-800/50 rounded-2xl p-4 overflow-y-auto space-y-3 custom-scrollbar border border-slate-700"
+                className="flex-1 bg-slate-800/50 rounded-2xl p-4 overflow-y-auto space-y-4 custom-scrollbar border border-slate-700 shadow-inner"
             >
                 {clues.map((clue, i) => (
                     <div key={i} className="flex gap-3 animate-in slide-in-from-left fade-in duration-500">
-                        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-emerald-900 text-emerald-400 flex items-center justify-center font-bold font-mono border border-emerald-700">
+                        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-emerald-900 text-emerald-400 flex items-center justify-center font-bold font-mono border border-emerald-700 shadow-sm">
                             {i + 1}
                         </div>
-                        <div className="bg-slate-700 p-3 rounded-r-xl rounded-bl-xl text-lg font-medium shadow-sm flex-1">
+                        <div className="bg-slate-700 p-4 rounded-r-2xl rounded-bl-2xl text-lg font-medium shadow-md flex-1 border border-slate-600">
                             {clue}
                         </div>
                     </div>
                 ))}
                 
+                {/* RESULTADO DA RODADA */}
                 {phase === 'ROUND_END' && (
-                    <div className="mt-8 p-6 bg-emerald-900/30 border-2 border-emerald-500 rounded-2xl text-center animate-in zoom-in">
-                        <p className="text-emerald-400 text-xs font-bold uppercase mb-2">A RESPOSTA ERA</p>
-                        <h2 className="text-3xl font-black text-white uppercase mb-4">{gameData.answer}</h2>
+                    <div className="mt-8 p-6 bg-emerald-900/30 border-2 border-emerald-500 rounded-2xl text-center animate-in zoom-in shadow-2xl">
+                        <p className="text-emerald-400 text-xs font-bold uppercase mb-2 tracking-widest">A RESPOSTA ERA</p>
+                        <h2 className="text-3xl md:text-4xl font-black text-white uppercase mb-6 tracking-wide drop-shadow-md">{gameData.answer}</h2>
                         
                         {gameData.roundWinner ? (
-                            <div className="flex justify-center items-center gap-2 text-yellow-400 font-bold bg-black/20 p-2 rounded-lg inline-flex">
-                                <Trophy size={20}/> Vencedor: {gameData.roundWinner}
+                            <div className="inline-flex items-center gap-3 bg-slate-900/50 px-6 py-3 rounded-full border border-emerald-500/30">
+                                <Trophy size={24} className="text-yellow-400"/>
+                                <div>
+                                    <p className="text-xs text-slate-400 uppercase font-bold text-left">Acertou</p>
+                                    <p className="font-bold text-white text-lg">{players.find(p=>p.id === gameData.roundWinner)?.nickname || "Alguém"}</p>
+                                </div>
                             </div>
                         ) : (
-                            <p className="text-slate-400 text-sm">Ninguém acertou.</p>
+                            <p className="text-slate-400 text-sm bg-black/20 p-2 rounded-lg inline-block">Ninguém acertou esta.</p>
                         )}
                         
-                        <div className="mt-4 flex justify-center items-center gap-2 text-slate-400 text-xs animate-pulse">
-                            <Clock size={12}/> Próxima rodada em instantes...
+                        <div className="mt-6 flex justify-center items-center gap-2 text-slate-400 text-xs animate-pulse font-mono">
+                            <Clock size={14}/> Próxima rodada em instantes...
                         </div>
                     </div>
                 )}
+                <div className="h-4"></div>
             </div>
         </div>
 
-        {/* CONTROLES DO HOST (Apenas Pular Dica) */}
-        {isHost && phase === 'CLUES' && (
-            <button 
-                onClick={nextClue}
-                disabled={clues.length >= 10}
-                className="mb-4 text-slate-500 hover:text-white font-bold text-xs uppercase tracking-widest transition flex items-center gap-1 disabled:opacity-0"
-            >
-                Forçar Próxima Dica <ArrowRight size={12}/>
-            </button>
-        )}
-
-        {/* ÁREA DE INPUT */}
+        {/* INPUT DE RESPOSTA */}
         {phase === 'CLUES' && (
-            <div className="w-full max-w-2xl">
+            <div className="w-full max-w-2xl bg-slate-800 p-4 rounded-2xl shadow-xl border-t border-slate-700">
                 <form onSubmit={sendGuess} className={`w-full flex gap-2 transition-transform ${shake ? 'animate-shake' : ''}`}>
                     <div className="relative flex-1">
                         <input 
-                            className={`w-full bg-slate-800 border-2 rounded-xl px-4 py-4 pl-12 text-lg outline-none transition text-white placeholder:text-slate-500
-                            ${shake ? 'border-red-500 text-red-200' : 'border-slate-700 focus:border-emerald-500'}
-                            ${isLocked ? 'opacity-50 cursor-not-allowed' : ''}`}
-                            placeholder={isLocked ? "Você já chutou nesta dica..." : "Qual é a resposta?"}
+                            className={`w-full bg-slate-900 border-2 rounded-xl px-4 py-4 pl-12 text-lg outline-none transition text-white placeholder:text-slate-600 font-bold
+                            ${shake ? 'border-red-500 text-red-200' : 'border-slate-600 focus:border-emerald-500'}
+                            ${isLocked ? 'opacity-50 cursor-not-allowed bg-slate-950' : ''}`}
+                            placeholder={isLocked ? "Aguardando próxima dica..." : "Digite sua resposta..."}
                             value={guess} 
                             onChange={e => { setGuess(e.target.value); if(shake) setShake(false); }} 
                             disabled={isLocked}
                             autoFocus
                         />
                         <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500">
-                            {isLocked ? <Lock size={20} className="text-red-500"/> : <Unlock size={20}/>}
+                            {isLocked ? <Lock size={20} className="text-red-500"/> : <Unlock size={20} className="text-emerald-500"/>}
                         </div>
                     </div>
                     <button 
                         disabled={isLocked || !guess.trim()}
-                        className="bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 text-white px-6 rounded-xl font-black transition transform active:scale-95"
+                        className="bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 text-white px-6 rounded-xl font-black transition transform active:scale-95 shadow-lg"
                     >
                         <Send />
                     </button>
                 </form>
-                {isLocked && <p className="text-center text-slate-500 text-xs font-bold mt-2">Aguardando outros jogadores ou próxima dica...</p>}
+                
+                {isHost && (
+                    <div className="mt-4 flex justify-end">
+                        <button 
+                            onClick={nextClue}
+                            disabled={clues.length >= 10}
+                            className="text-slate-500 hover:text-white font-bold text-xs uppercase tracking-widest transition flex items-center gap-1 disabled:opacity-0 bg-slate-700/50 hover:bg-slate-700 px-3 py-1 rounded-full"
+                        >
+                            Pular Dica <ArrowRight size={12}/>
+                        </button>
+                    </div>
+                )}
             </div>
         )}
 
-        {/* PLACAR */}
-        <div className="w-full max-w-4xl mt-6 overflow-x-auto no-scrollbar pb-8">
-             <div className="flex gap-4">
+        {/* PLACAR SIMPLIFICADO */}
+        <div className="w-full max-w-2xl mt-6 overflow-x-auto no-scrollbar pb-4">
+             <div className="flex gap-3">
                 {players.sort((a,b) => b.score - a.score).map((p, i) => (
-                    <div key={p.id} className="bg-slate-800 p-3 rounded-xl min-w-[100px] flex flex-col items-center border border-slate-700">
-                        <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm mb-2 ${i===0 ? 'bg-yellow-400 text-black' : 'bg-slate-600'}`}>
-                            {i===0 ? '1º' : i+1}
+                    <div key={p.id} className={`bg-slate-800 p-2 px-4 rounded-xl min-w-[100px] flex flex-col items-center border border-slate-700 ${i===0 ? 'border-yellow-500/50 bg-yellow-900/10' : ''}`}>
+                        <div className="flex items-center gap-2 mb-1">
+                            {i===0 && <Trophy size={12} className="text-yellow-400"/>}
+                            <span className="font-bold text-xs text-slate-300 truncate max-w-[80px]">{p.nickname}</span>
                         </div>
-                        <span className="font-bold truncate max-w-[80px] text-sm">{p.nickname}</span>
-                        <span className="text-emerald-400 font-mono font-bold text-lg">{p.score}</span>
+                        <span className="text-emerald-400 font-mono font-black text-lg">{p.score}</span>
                     </div>
                 ))}
              </div>
         </div>
-
-        <style>{`
-            @keyframes shake {
-                0%, 100% { transform: translateX(0); }
-                25% { transform: translateX(-5px); }
-                75% { transform: translateX(5px); }
-            }
-            .animate-shake { animation: shake 0.3s ease-in-out; }
-        `}</style>
     </div>
   );
 }

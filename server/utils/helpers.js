@@ -7,8 +7,13 @@ const shuffle = (array) => {
     return newArr;
 };
 
-const generateDeck = () => {
-    const deck = Array.from({ length: 100 }, (_, i) => i + 1);
+const getRandomItem = (array) => {
+    if (!array || array.length === 0) return null;
+    return array[Math.floor(Math.random() * array.length)];
+};
+
+const generateDeck = (size = 100) => {
+    const deck = Array.from({ length: size }, (_, i) => i + 1);
     return shuffle(deck);
 };
 
@@ -17,4 +22,4 @@ const normalize = (str) => {
     return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 };
 
-module.exports = { shuffle, generateDeck, normalize };
+module.exports = { shuffle, getRandomItem, generateDeck, normalize };

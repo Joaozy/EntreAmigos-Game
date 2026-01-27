@@ -1,183 +1,126 @@
 const { shuffle, normalize } = require('../utils/helpers');
-const CATEGORIES_STOP = require('../data/categories_stop.json');
+let CATEGORIES = ["Nome", "CEP", "Cor", "Animal", "Fruta", "Marca", "Objeto", "Filme"];
+try {
+    const loaded = require('../data/categories_stop.json');
+    if (Array.isArray(loaded)) CATEGORIES = loaded;
+} catch (e) {}
 
-const startStop = (io, room, roomId) => {
-    stopInitRound(io, room, roomId, 1);
-    room.gameData.totalScores = {}; 
-    room.gameData.round = 1;
-    room.gameData.maxRounds = 5;
-    room.phase = 'GAME';
-    
-    io.to(roomId).emit('game_started', { gameType: 'STOP', phase: 'PLAYING', gameData: room.gameData, players: room.players });
-    startStopTimer(io, room, roomId);
-};
-
-const handleStopRejoin = (room, oldId, newId) => {
-    let updated = false;
-    const gd = room.gameData;
-    
-    // Atualiza Caller
-    if (gd.stopCaller === oldId) { gd.stopCaller = newId; updated = true; }
-    
-    // Atualiza Respostas (Migra chave do objeto)
-    if (gd.answers && gd.answers[oldId]) {
-        gd.answers[newId] = gd.answers[oldId];
-        delete gd.answers[oldId];
-        updated = true;
-    }
-
-    // Atualiza Scores Totais (Migra chave)
-    if (gd.totalScores && gd.totalScores[oldId] !== undefined) {
-        gd.totalScores[newId] = gd.totalScores[oldId];
-        delete gd.totalScores[oldId];
-        updated = true;
-    }
-    
-    // Atualiza Votos (Complexo: chave contém ID e valores contêm ID)
-    if (gd.votes) {
-        // 1. Atualizar quem votou
-        Object.keys(gd.votes).forEach(key => {
-            ['invalid', 'duplicate'].forEach(type => {
-                const idx = gd.votes[key][type].indexOf(oldId);
-                if (idx !== -1) {
-                    gd.votes[key][type][idx] = newId;
-                    updated = true;
-                }
-            });
-        });
-        
-        // 2. Atualizar chaves (se o alvo do voto mudou de ID)
-        // As chaves são 'TARGETID_CATINDEX'
-        const keysToMigrate = Object.keys(gd.votes).filter(k => k.startsWith(oldId + '_'));
-        keysToMigrate.forEach(oldKey => {
-            const suffix = oldKey.substring(oldId.length); // pega _0, _1 etc
-            const newKey = newId + suffix;
-            gd.votes[newKey] = gd.votes[oldKey];
-            delete gd.votes[oldKey];
-            updated = true;
-        });
-    }
-
-    return updated;
-};
-
-// ... FUNÇÕES INTERNAS E HANDLERS (Mantenha o conteúdo original abaixo) ...
-const stopInitRound = (io, room, roomId, roundNum) => {
-    const alphabet = "ABCDEFGHIJKLMNOPRSTUV"; 
-    const letter = alphabet[Math.floor(Math.random() * alphabet.length)];
-    const shuffledCats = shuffle([...CATEGORIES_STOP]).slice(0, 8);
-    
-    room.gameData.round = roundNum;
-    room.gameData.letter = letter;
-    room.gameData.categories = shuffledCats;
-    room.gameData.answers = {};
-    room.gameData.votes = {};
-    room.gameData.stopCaller = null;
-    room.gameData.phase = 'PLAYING';
-    room.gameData.endTime = Date.now() + 120000;
-};
-
-const startStopTimer = (io, room, roomId) => {
-    if (room.stopTimer) clearTimeout(room.stopTimer);
-    room.stopTimer = setTimeout(() => {
-        if (room.gameType === 'STOP' && room.gameData.phase === 'PLAYING') {
-            room.gameData.stopCaller = 'TIMEOUT'; 
-            io.to(roomId).emit('stop_triggered', { callerId: 'TIMEOUT', nickname: "TEMPO ESGOTADO" });
-            setTimeout(() => {
-                room.gameData.phase = 'REVIEW';
-                io.to(roomId).emit('update_game_data', { gameData: room.gameData, phase: 'REVIEW' });
-            }, 3000);
-        }
-    }, 120000); 
-};
-
-const registerStopHandlers = (io, socket, rooms) => {
+module.exports = (io, socket, rooms) => {
     socket.on('stop_submit', ({ roomId, answers }) => {
-        const room = rooms.get(roomId); if(!room) return;
-        room.gameData.answers[socket.id] = answers;
-        if (room.gameData.stopCaller) {
-             if (room.players.every(p => room.gameData.answers[p.id])) { 
-                 room.gameData.phase = 'REVIEW'; 
-                 io.to(roomId).emit('update_game_data', { gameData: room.gameData, phase: 'REVIEW' }); 
-             }
+        const room = rooms[roomId]; if(!room) return;
+        room.state.answers[socket.id] = answers;
+        if (room.state.stopCaller) {
+             const submittedCount = Object.keys(room.state.answers).length;
+             if (submittedCount >= room.players.length) startReviewPhase(io, room, roomId);
         }
     });
 
     socket.on('stop_call', ({ roomId, answers }) => {
-        const room = rooms.get(roomId); if(!room || room.gameData.stopCaller) return; 
-        const filledCount = Object.values(answers || {}).filter(v => v && v.trim().length > 0).length;
-        if (filledCount < 8) return; 
-        room.gameData.answers[socket.id] = answers;
-        room.gameData.stopCaller = socket.id;
-        if (room.stopTimer) clearTimeout(room.stopTimer);
-        io.to(roomId).emit('stop_triggered', { callerId: socket.id, nickname: room.players.find(p=>p.id===socket.id)?.nickname });
-        setTimeout(() => { 
-            if(room.phase === 'GAME' && room.gameData.phase === 'PLAYING') { 
-                room.gameData.phase = 'REVIEW'; 
-                io.to(roomId).emit('update_game_data', { gameData: room.gameData, phase: 'REVIEW' }); 
-            } 
-        }, 5000); 
+        const room = rooms[roomId]; if(!room || room.state.stopCaller) return; 
+        room.state.answers[socket.id] = answers;
+        room.state.stopCaller = socket.id;
+        if (room.state.timer) clearTimeout(room.state.timer);
+        io.to(roomId).emit('stop_triggered', { callerId: socket.id, nickname: room.players.find(p=>p.socketId===socket.id)?.nickname });
+        setTimeout(() => startReviewPhase(io, room, roomId), 5000); 
     });
 
     socket.on('stop_toggle_vote', ({ roomId, targetId, categoryIndex, voteType }) => {
-        const room = rooms.get(roomId); if(!room) return;
+        const room = rooms[roomId]; if(!room) return;
         const key = `${targetId}_${categoryIndex}`;
-        if (!room.gameData.votes[key]) room.gameData.votes[key] = { invalid: [], duplicate: [] };
-        const currentVotes = room.gameData.votes[key][voteType];
-        const voterIndex = currentVotes.indexOf(socket.id);
-        if (voterIndex !== -1) currentVotes.splice(voterIndex, 1);
-        else {
-            const otherType = voteType === 'invalid' ? 'duplicate' : 'invalid';
-            const otherVotes = room.gameData.votes[key][otherType];
-            const otherIdx = otherVotes.indexOf(socket.id);
-            if (otherIdx !== -1) otherVotes.splice(otherIdx, 1);
-            currentVotes.push(socket.id);
-        }
-        io.to(roomId).emit('update_game_data', { gameData: room.gameData, phase: 'REVIEW' });
+        if (!room.state.votes[key]) room.state.votes[key] = { invalid: [], duplicate: [] };
+        const votesObj = room.state.votes[key];
+        ['invalid', 'duplicate'].forEach(t => {
+            if(votesObj[t].includes(socket.id)) votesObj[t] = votesObj[t].filter(id => id !== socket.id);
+        });
+        if (voteType !== 'none') votesObj[voteType].push(socket.id);
+        updateGame(io, room, roomId);
     });
 
     socket.on('stop_next_round', ({ roomId }) => {
-        const room = rooms.get(roomId); if(!room || room.host !== socket.id) return;
-        // Calcular Pontos
-        room.players.forEach(p => {
-            let roundScore = 0;
-            const playerAns = room.gameData.answers[p.id] || {};
-            room.gameData.categories.forEach((cat, idx) => {
-                const rawWord = playerAns[idx] || "";
-                const normWord = normalize(rawWord);
-                if (!normWord) return;
-                const key = `${p.id}_${idx}`;
-                const votes = (room.gameData.votes && room.gameData.votes[key]) ? room.gameData.votes[key] : { invalid: [], duplicate: [] };
-                const threshold = room.players.length / 2;
-                if (votes.invalid.length > threshold) return; 
-                let isDuplicate = false;
-                if (votes.duplicate.length > threshold) {
-                    isDuplicate = true;
-                } else {
-                    room.players.forEach(op => {
-                        if (op.id !== p.id) {
-                            const otherNorm = normalize((room.gameData.answers[op.id] || {})[idx]);
-                            if (otherNorm === normWord) isDuplicate = true;
-                        }
-                    });
-                }
-                roundScore += isDuplicate ? 5 : 10;
-            });
-            room.gameData.totalScores[p.id] = (room.gameData.totalScores[p.id] || 0) + roundScore;
-        });
-
-        // Next Round ou Game Over
-        if (room.gameData.round >= 5) {
-            room.gameData.phase = 'GAME_OVER';
-            const sorted = [...room.players].sort((a,b) => (room.gameData.totalScores[b.id]||0) - (room.gameData.totalScores[a.id]||0));
-            room.gameData.winner = sorted[0];
-            io.to(roomId).emit('update_game_data', { gameData: room.gameData, phase: 'GAME_OVER' });
+        const room = rooms[roomId]; if(!room) return;
+        calculateScores(room);
+        if (room.state.round >= 5) {
+            endGame(io, room, roomId);
         } else {
-            stopInitRound(io, room, roomId, room.gameData.round + 1);
-            io.to(roomId).emit('update_game_data', { gameData: room.gameData, phase: 'PLAYING' });
-            startStopTimer(io, room, roomId);
+            initRound(room, room.state.round + 1);
+            io.to(roomId).emit('update_game_data', { gameData: room.state, phase: 'PLAYING' });
+            startTimer(io, room, roomId);
         }
     });
 };
 
-module.exports = { startStop, registerStopHandlers, handleStopRejoin };
+module.exports.initGame = (room, io) => {
+    room.state = { totalScores: {}, round: 0 };
+    room.players.forEach(p => room.state.totalScores[p.socketId] = 0);
+    initRound(room, 1);
+    
+    // Timer
+    if (io) setTimeout(() => startTimer(io, room, room.id), 100);
+
+    return { phase: 'PLAYING', gameData: room.state };
+};
+
+function initRound(room, roundNum) {
+    const alphabet = "ABCDEFGHIJKLMNOPRSTUV"; 
+    const letter = alphabet[Math.floor(Math.random() * alphabet.length)];
+    const cats = shuffle([...CATEGORIES]).slice(0, 8);
+    room.state = { ...room.state, round: roundNum, letter, categories: cats, answers: {}, votes: {}, stopCaller: null, phase: 'PLAYING', endTime: Date.now() + 180000 };
+}
+
+function startReviewPhase(io, room, roomId) {
+    if (room.state.phase === 'REVIEW') return;
+    room.state.phase = 'REVIEW';
+    updateGame(io, room, roomId);
+}
+
+function calculateScores(room) {
+    room.players.forEach(p => {
+        let roundScore = 0;
+        const playerAns = room.state.answers[p.socketId] || {};
+        room.state.categories.forEach((cat, idx) => {
+            const raw = playerAns[idx];
+            if (!raw) return;
+            const norm = normalize(raw);
+            if (!norm || norm[0].toUpperCase() !== room.state.letter) return;
+
+            const key = `${p.socketId}_${idx}`;
+            const votes = room.state.votes[key] || { invalid: [], duplicate: [] };
+            if (votes.invalid.length > room.players.length / 2) return; 
+            
+            let isDuplicate = votes.duplicate.length > room.players.length / 2;
+            if(!isDuplicate) {
+                room.players.forEach(op => {
+                    if (op.socketId !== p.socketId) {
+                        const otherNorm = normalize((room.state.answers[op.socketId] || {})[idx]);
+                        if (otherNorm === norm) isDuplicate = true;
+                    }
+                });
+            }
+            roundScore += isDuplicate ? 5 : 10;
+        });
+        room.state.totalScores[p.socketId] = (room.state.totalScores[p.socketId] || 0) + roundScore;
+    });
+}
+
+function endGame(io, room, roomId) {
+    const gd = room.state;
+    const sorted = Object.entries(gd.totalScores).sort((a,b) => b[1] - a[1]);
+    const winner = room.players.find(p => p.socketId === sorted[0][0]);
+    gd.phase = 'GAME_OVER'; gd.winner = winner;
+    io.to(roomId).emit('game_over', { winner, gameData: gd, phase: 'GAME_OVER' });
+}
+
+function updateGame(io, room, roomId) {
+    io.to(roomId).emit('update_game_data', { gameData: room.state, phase: room.state.phase });
+}
+
+function startTimer(io, room, roomId) {
+    if (room.state.timer) clearTimeout(room.state.timer);
+    room.state.timer = setTimeout(() => {
+        if (room.state.phase === 'PLAYING') {
+            room.state.stopCaller = 'TIMEOUT'; 
+            io.to(roomId).emit('stop_triggered', { callerId: 'TIMEOUT', nickname: "TEMPO ESGOTADO" });
+            setTimeout(() => startReviewPhase(io, room, roomId), 3000);
+        }
+    }, 180000);
+}

@@ -1,8 +1,12 @@
 import React from 'react';
 import { useGame } from '../context/GameContext';
+import { GAMES_LIST } from './Lobby'; // Importa a lista para pegar ícones e nomes
 
 export default function WaitingRoom() {
   const { roomId, players, isHost, selectedGame, socket, sairDoJogo } = useGame();
+
+  // Encontra os detalhes do jogo selecionado para exibir bonito
+  const gameDetails = GAMES_LIST.find(g => g.id === selectedGame) || { name: selectedGame, icon: '🎮', color: 'bg-slate-500' };
 
   const handleStart = () => {
     socket.emit('start_game', { roomId });
@@ -17,10 +21,18 @@ export default function WaitingRoom() {
     <div className="min-h-screen bg-slate-900 p-6 flex flex-col items-center justify-center text-white">
       
       {/* HEADER DA SALA */}
-      <div className="text-center mb-8">
+      <div className="text-center mb-8 relative">
         <h2 className="text-sm font-bold text-slate-400 tracking-widest uppercase mb-2">SALA DE ESPERA</h2>
-        <h1 className="text-4xl font-black text-indigo-500 mb-4">{selectedGame}</h1>
         
+        {/* CARD DO JOGO SELECIONADO */}
+        <div className={`inline-block p-6 rounded-3xl mb-6 border-2 border-white/10 relative overflow-hidden bg-slate-800`}>
+            <div className={`absolute top-0 right-0 w-24 h-24 rounded-bl-full opacity-20 ${gameDetails.color}`}></div>
+            <span className="text-6xl mb-2 block">{gameDetails.icon}</span>
+            <h1 className="text-3xl font-black text-white">{gameDetails.name}</h1>
+        </div>
+        
+        <br/>
+
         <div 
           onClick={copyCode}
           className="bg-slate-800 border-2 border-indigo-500/30 rounded-2xl p-4 inline-flex items-center gap-4 cursor-pointer hover:bg-slate-700 transition"
@@ -39,7 +51,7 @@ export default function WaitingRoom() {
         
         <div className="grid grid-cols-2 gap-3">
           {players.map((p) => (
-            <div key={p.userId} className="flex items-center gap-3 bg-slate-700 p-3 rounded-xl">
+            <div key={p.userId} className="flex items-center gap-3 bg-slate-700 p-3 rounded-xl animate-in fade-in zoom-in">
               <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-lg ${p.isHost ? 'bg-yellow-500 text-black' : 'bg-indigo-500 text-white'}`}>
                 {p.nickname[0].toUpperCase()}
               </div>

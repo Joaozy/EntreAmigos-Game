@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { useGame } from '../context/GameContext';
 
-// Lista COMPLETA de jogos baseada nos arquivos que você enviou
-const GAMES = [
+// Lista de Jogos (Centralizada visualmente aqui)
+export const GAMES_LIST = [
     { id: 'ITO', name: 'ITO', icon: '🌊', color: 'bg-blue-500', desc: 'Cooperativo' },
     { id: 'CHA_CAFE', name: 'Chá ou Café', icon: '☕', color: 'bg-orange-500', desc: 'Debate' },
     { id: 'MEGAQUIZ', name: 'MegaQuiz', icon: '🧠', color: 'bg-purple-600', desc: 'Trivia' },
@@ -17,7 +17,7 @@ const GAMES = [
 ];
 
 export default function Lobby() {
-  const { criarSala, entrarSala, nickname, setRoomId, roomId, setSelectedGame, selectedGame, myStats, logout } = useGame(); 
+  const { criarSala, entrarSala, nickname, setRoomId, roomId, setSelectedGame, selectedGame, logout } = useGame(); 
   const [mode, setMode] = useState('MENU'); 
 
   return (
@@ -56,8 +56,8 @@ export default function Lobby() {
       {mode === 'CREATE' && (
           <div className="w-full max-w-md animate-in fade-in slide-in-from-right h-full flex flex-col">
               <h2 className="text-white font-bold text-xl mb-4">Escolha o Jogo</h2>
-              <div className="grid grid-cols-2 gap-3 mb-6 overflow-y-auto pr-2 flex-1 scrollbar-hide">
-                  {GAMES.map(g => (
+              <div className="grid grid-cols-2 gap-3 mb-6 overflow-y-auto pr-2 flex-1 scrollbar-hide max-h-[60vh]">
+                  {GAMES_LIST.map(g => (
                       <button 
                         key={g.id}
                         onClick={() => setSelectedGame(g.id)}
@@ -71,8 +71,12 @@ export default function Lobby() {
                   ))}
               </div>
               <div className="mt-auto pt-4 bg-slate-900 sticky bottom-0">
-                <button onClick={criarSala} className="w-full bg-green-500 py-4 rounded-xl font-black text-white shadow-lg hover:bg-green-400 transition transform active:scale-95 text-lg mb-3">
-                    INICIAR JOGO
+                <button 
+                    onClick={criarSala} 
+                    disabled={!selectedGame} // TRAVA DE SEGURANÇA
+                    className="w-full bg-green-500 py-4 rounded-xl font-black text-white shadow-lg hover:bg-green-400 transition transform active:scale-95 text-lg mb-3 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    {selectedGame ? "INICIAR JOGO" : "ESCOLHA UM JOGO"}
                 </button>
                 <button onClick={() => setMode('MENU')} className="w-full text-slate-500 font-bold text-sm py-2 hover:text-white transition">VOLTAR</button>
               </div>
