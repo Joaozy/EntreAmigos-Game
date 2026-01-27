@@ -81,20 +81,27 @@ export const GameProvider = ({ children }) => {
         const onJoinedRoom = (data) => {
             setRoomId(data.roomId);
             setPlayers(data.players);
-            setGameType(data.gameType);
+            
+            // ATENÇÃO: Se o servidor mandar o gameType, usamos ele (quem entra).
+            // Se não mandar (quem cria), usamos o selectedGame local.
+            if (data.gameType) setSelectedGame(data.gameType);
+            
             if(data.gameData) setGameData(data.gameData);
+            if(data.mySecretNumber) setMySecret(data.mySecretNumber);
             
-            const me = data.players.find(p => p.userId === user?.id);
-            setIsHost(me?.isHost || false);
-            
+            // Verifica Host
+            if(user && data.players) {
+                const me = data.players.find(p => p.userId === user.id);
+                setIsHost(me?.isHost || false);
+            }
+
             localStorage.setItem('saved_roomId', data.roomId);
 
-            if (data.phase !== 'LOBBY') {
-                setCurrentPhase(data.phase);
-                setView('GAME');
-            } else {
-                setView('LOBBY'); // Sala de espera
-            }
+            // CORREÇÃO CRÍTICA: Sempre vai para a view 'GAME' se entrou na sala.
+            // A WaitingRoom vai lidar com a fase 'LOBBY'.
+            setCurrentPhase(data.phase);
+            setView('GAME'); 
+            
             setIsJoining(false);
         };
 

@@ -1,178 +1,193 @@
 import React, { useState, useEffect } from 'react';
-import { socket } from './socket';
-import { Delete, Check, Trophy, ArrowRight } from 'lucide-react';
+import { useGame } from './context/GameContext';
 
-export default function GameTermo({ players, isHost, roomId, gameData, phase }) {
-  const [currentGuess, setCurrentGuess] = useState('');
+const KEYBOARD_ROWS = [
+  ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'],
+  ['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'],
+  ['ENTER', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', '⌫']
+];
+
+export default function GameTermo() {
+  const { socket, roomId, players } = useGame();
   
-  const myState = gameData?.playersState?.[socket.id] || { board: [], status: 'PLAYING' };
-  const attempts = myState.board || [];
-  const status = myState.status;
-  const secretWord = gameData?.secretWord;
-  const totalScores = gameData?.totalScores || {};
-  const currentRound = gameData?.round || 1;
-
-  // TECLADO
-  const keys = [
-    ['Q','W','E','R','T','Y','U','I','O','P'],
-    ['A','S','D','F','G','H','J','K','L'],
-    ['Z','X','C','V','B','N','M']
-  ];
+  // Estado Local
+  const [currentGuess, setCurrentGuess] = useState('');
+  const [history, setHistory] = useState([]); 
+  const [gameStatus, setGameStatus] = useState('PLAYING');
+  const [secretWord, setSecretWord] = useState('');
+  const [shakeRow, setShakeRow] = useState(false);
+  const [scoreboard, setScoreboard] = useState([]);
 
   useEffect(() => {
+    // 1. Receber atualizações do meu próprio jogo
+    socket.on('game_termo_update_private', (data) => {
+        setHistory(data.history);
+        setGameStatus(data.status);
+        if(data.secretWord) setSecretWord(data.secretWord);
+    });
+
+    // 2. Receber erro (palavra invalida)
+    socket.on('game_termo_error', () => {
+        setShakeRow(true);
+        setTimeout(() => setShakeRow(false), 500);
+    });
+
+    // 3. Receber placar geral (quem já terminou)
+    socket.on('game_termo_scoreboard', (data) => {
+        setScoreboard(data);
+    });
+
+    return () => {
+        socket.off('game_termo_update_private');
+        socket.off('game_termo_error');
+        socket.off('game_termo_scoreboard');
+    };
+  }, [socket]);
+
+  // Input Handler
+  const handleInput = (key) => {
+    if (gameStatus !== 'PLAYING') return;
+
+    if (key === 'ENTER') {
+        if (currentGuess.length === 5) {
+            socket.emit('game_termo_guess', { guess: currentGuess });
+            setCurrentGuess('');
+        } else {
+            setShakeRow(true);
+            setTimeout(() => setShakeRow(false), 500);
+        }
+        return;
+    }
+
+    if (key === '⌫' || key === 'BACKSPACE') {
+        setCurrentGuess(prev => prev.slice(0, -1));
+        return;
+    }
+
+    if (/^[A-Z]$/.test(key) && currentGuess.length < 5) {
+        setCurrentGuess(prev => prev + key);
+    }
+  };
+
+  // Teclado Físico
+  useEffect(() => {
     const handleKeyDown = (e) => {
-        if (phase !== 'PLAYING' || status !== 'PLAYING') return;
-        const key = e.key.toUpperCase();
-        if (key === 'ENTER') submitGuess();
-        else if (key === 'BACKSPACE') setCurrentGuess(prev => prev.slice(0, -1));
-        else if (/^[A-Z]$/.test(key) && currentGuess.length < 5) setCurrentGuess(prev => prev + key);
+        let key = e.key.toUpperCase();
+        if (key === 'BACKSPACE') key = '⌫';
+        if (key === 'ENTER' || key === '⌫' || /^[A-Z]$/.test(key)) {
+            handleInput(key);
+        }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [currentGuess, phase, status]);
+  }, [currentGuess, gameStatus]);
 
-  const onKeyClick = (key) => { if (currentGuess.length < 5) setCurrentGuess(prev => prev + key); };
+  // Função Auxiliar para renderizar a Grid
+  const renderGrid = () => {
+    const rows = [];
+    // 6 tentativas fixas
+    for (let i = 0; i < 6; i++) {
+        let content = null;
+        let animate = false;
 
-  const submitGuess = () => {
-      if (currentGuess.length !== 5) return;
-      socket.emit('termo_guess', { roomId, word: currentGuess });
-      setCurrentGuess('');
-  };
+        // Linha Passada (Validada)
+        if (i < history.length) {
+            content = history[i].map((cell, idx) => {
+                let color = 'bg-slate-700 border-slate-700';
+                if (cell.status === 'correct') color = 'bg-green-600 border-green-600';
+                if (cell.status === 'present') color = 'bg-yellow-500 border-yellow-500';
+                return (
+                    <div key={idx} className={`w-10 h-10 sm:w-14 sm:h-14 border-2 text-white font-bold text-2xl flex items-center justify-center rounded ${color} transform transition-all duration-500 flip-in`}>
+                        {cell.letter}
+                    </div>
+                );
+            });
+        } 
+        // Linha Atual (Digitando)
+        else if (i === history.length) {
+            animate = shakeRow;
+            const letters = currentGuess.split('');
+            content = [0,1,2,3,4].map(idx => (
+                <div key={idx} className="w-10 h-10 sm:w-14 sm:h-14 border-2 border-slate-500 bg-slate-800/50 text-white font-bold text-2xl flex items-center justify-center rounded">
+                    {letters[idx] || ''}
+                </div>
+            ));
+        } 
+        // Linhas Futuras (Vazias)
+        else {
+            content = [0,1,2,3,4].map(idx => (
+                <div key={idx} className="w-10 h-10 sm:w-14 sm:h-14 border-2 border-slate-800 bg-transparent rounded opacity-50"></div>
+            ));
+        }
 
-  const getKeyColor = (key) => {
-      let color = 'bg-slate-700';
-      attempts.forEach(attempt => {
-          const idx = attempt.word.indexOf(key);
-          if (idx !== -1) {
-              const res = attempt.results[idx];
-              if (res === 'G') color = 'bg-emerald-600';
-              else if (res === 'Y' && color !== 'bg-emerald-600') color = 'bg-yellow-600';
-              else if (res === 'X' && color !== 'bg-emerald-600' && color !== 'bg-yellow-600') color = 'bg-slate-900 opacity-50';
-          }
-      });
-      return color;
-  };
-
-  const getCellColor = (resultChar) => {
-      if (resultChar === 'G') return 'bg-emerald-600 border-emerald-600';
-      if (resultChar === 'Y') return 'bg-yellow-600 border-yellow-600';
-      if (resultChar === 'X') return 'bg-slate-700 border-slate-700';
-      return 'bg-transparent border-slate-600';
+        rows.push(
+            <div key={i} className={`flex gap-1 sm:gap-2 mb-1 sm:mb-2 justify-center ${animate ? 'animate-shake' : ''}`}>
+                {content}
+            </div>
+        );
+    }
+    return rows;
   };
 
   return (
-    // CORREÇÃO 1: 'items-center' para centralizar tudo e 'flex-col-reverse' para o placar ficar embaixo no celular
-    <div className="min-h-screen bg-slate-900 text-white p-2 flex flex-col-reverse md:flex-row gap-4 justify-center items-center md:items-start">
-        
-        {/* PLACAR LATERAL */}
-        {/* CORREÇÃO 2: Removido 'hidden', adicionado 'w-full max-w-sm' para mobile */}
-        <div className="w-full max-w-sm md:w-64 bg-slate-800 p-4 rounded-xl shadow-lg md:mt-4 mb-8 md:mb-0">
-            <h3 className="font-bold text-slate-400 mb-4 text-xs uppercase text-center md:text-left">Placar Geral</h3>
-            <div className="space-y-3">
-                {players.sort((a,b) => (totalScores[b.id]||0) - (totalScores[a.id]||0)).map(p => {
-                    const st = gameData?.playersState?.[p.id];
-                    return (
-                        <div key={p.id} className="flex justify-between items-center text-sm border-b border-slate-700 pb-2">
-                            <div>
-                                <div className={p.id === socket.id ? "text-emerald-400 font-bold" : "text-white"}>{p.nickname}</div>
-                                <div className="text-[10px] text-slate-500">
-                                    {st?.status === 'WON' ? `Acertou em ${st.board.length}` : (st?.status === 'LOST' ? 'Falhou' : 'Jogando...')}
-                                </div>
-                            </div>
-                            <div className="font-mono font-bold text-lg">{totalScores[p.id] || 0}</div>
-                        </div>
-                    );
-                })}
-            </div>
-        </div>
-
-        {/* CENTRO (JOGO) */}
-        <div className="flex-1 max-w-md flex flex-col items-center w-full">
-            <div className="flex items-center justify-between w-full px-2 mb-2 md:mb-4 mt-2">
-                <h1 className="text-2xl md:text-3xl font-black text-emerald-500 tracking-widest">TERMO</h1>
-                <div className="text-[10px] md:text-xs font-bold bg-slate-800 px-3 py-1 rounded text-slate-400">RODADA {currentRound}/5</div>
-            </div>
-
-            {/* MENSAGEM DE FIM DA RODADA */}
-            {(phase === 'ROUND_OVER' || phase === 'VICTORY') && (
-                <div className="mb-6 bg-slate-800 p-6 rounded-2xl text-center shadow-xl animate-in zoom-in w-full">
-                    {phase === 'VICTORY' ? (
-                        <>
-                             <Trophy size={60} className="text-yellow-400 mx-auto mb-4" />
-                             <h2 className="text-3xl font-black text-white mb-2">VENCEDOR</h2>
-                             <p className="text-2xl text-emerald-400 font-bold">{gameData.winner?.nickname}</p>
-                             <p className="text-slate-400 mb-6">{totalScores[gameData.winner?.id]} pontos</p>
-                        </>
-                    ) : (
-                        <>
-                            <p className="text-slate-400 text-sm uppercase">A palavra era</p>
-                            <h2 className="text-3xl md:text-4xl font-black text-white mb-4 tracking-widest">{secretWord}</h2>
-                            <div className="text-sm text-slate-300 mb-4">
-                                {status === 'WON' ? <span className="text-emerald-400">Você acertou! (+{(() => {
-                                    const len = attempts.length;
-                                    if(len===1)return 10; if(len===2)return 8; if(len===3)return 6; if(len===4)return 4; if(len===5)return 2; return 1;
-                                })()} pts)</span> : <span className="text-red-400">Você não conseguiu.</span>}
-                            </div>
-                        </>
-                    )}
-
-                    {isHost && (
-                        <button 
-                            onClick={() => phase === 'VICTORY' ? socket.emit('restart_game', { roomId }) : socket.emit('termo_next_round', { roomId })} 
-                            className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 px-8 rounded-full transition w-full flex items-center justify-center gap-2"
-                        >
-                            {phase === 'VICTORY' ? 'Voltar ao Lobby' : <>Próxima Rodada <ArrowRight size={18}/></>}
-                        </button>
-                    )}
+    <div className="min-h-screen bg-slate-900 flex flex-col lg:flex-row">
+      
+      {/* AREA DE JOGO (Esquerda) */}
+      <div className="flex-1 flex flex-col items-center justify-center p-2">
+        <div className="text-center mb-4">
+            <h1 className="text-3xl font-black text-white tracking-widest">TERMO</h1>
+            {gameStatus !== 'PLAYING' && (
+                <div className="mt-2 bg-slate-800 p-2 rounded-lg animate-bounce">
+                    {gameStatus === 'WON' 
+                        ? <span className="text-green-400 font-bold">PARABÉNS! ACERTOU! 🏆</span> 
+                        : <span className="text-red-400 font-bold">ERA: {secretWord} 💀</span>}
                 </div>
             )}
+        </div>
 
-            {/* GRID */}
-            <div className="grid grid-rows-6 gap-2 mb-4 md:mb-8">
-                {[...Array(6)].map((_, rowIndex) => {
-                    const attempt = attempts[rowIndex];
-                    const word = attempt ? attempt.word : (rowIndex === attempts.length ? currentGuess : '');
-                    const results = attempt ? attempt.results : [];
-                    return (
-                        <div key={rowIndex} className="grid grid-cols-5 gap-2">
-                            {[...Array(5)].map((_, colIndex) => {
-                                const char = word[colIndex] || '';
-                                const res = results[colIndex]; 
-                                return (
-                                    <div key={colIndex} className={`w-12 h-12 md:w-14 md:h-14 border-2 flex items-center justify-center text-2xl font-bold uppercase rounded transition-colors duration-500 ${getCellColor(res)}`}>
-                                        {char}
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    );
-                })}
-            </div>
+        <div className="mb-4">
+            {renderGrid()}
+        </div>
 
-            {/* TECLADO */}
-            {phase === 'PLAYING' && status === 'PLAYING' && (
-                <div className="w-full select-none px-1">
-                    {keys.map((row, i) => (
-                        <div key={i} className="flex justify-center gap-1 mb-2">
-                            {row.map(key => (
-                                // CORREÇÃO 3: 'w-7' no mobile para caber em telas pequenas
-                                <button key={key} onClick={() => onKeyClick(key)} className={`w-7 h-10 md:w-10 md:h-12 rounded font-bold text-sm transition active:scale-95 ${getKeyColor(key)}`}>{key}</button>
-                            ))}
-                        </div>
+        {/* Teclado Virtual */}
+        <div className="w-full max-w-lg px-2">
+            {KEYBOARD_ROWS.map((row, i) => (
+                <div key={i} className="flex justify-center gap-1 mb-1">
+                    {row.map(key => (
+                        <button
+                            key={key}
+                            onClick={() => handleInput(key)}
+                            className={`font-bold rounded h-10 sm:h-12 flex items-center justify-center transition active:scale-95 text-white
+                                ${key === 'ENTER' || key === '⌫' ? 'flex-[1.5] text-[10px] sm:text-xs bg-slate-600' : 'flex-1 bg-slate-500 hover:bg-slate-400'}`}
+                        >
+                            {key}
+                        </button>
                     ))}
-                    <div className="flex justify-center gap-2 mt-2">
-                        <button onClick={() => setCurrentGuess(prev => prev.slice(0, -1))} className="bg-red-900/50 text-red-200 px-6 py-3 rounded-lg font-bold flex items-center gap-2 active:scale-95"><Delete size={20}/></button>
-                        <button onClick={submitGuess} className="bg-emerald-600 text-white px-8 py-3 rounded-lg font-bold flex items-center gap-2 active:scale-95"><Check size={20}/></button>
+                </div>
+            ))}
+        </div>
+      </div>
+
+      {/* PLACAR (Direita / Abaixo em mobile) */}
+      <div className="bg-slate-800 w-full lg:w-64 p-4 border-l border-slate-700 overflow-y-auto max-h-[30vh] lg:max-h-screen">
+        <h3 className="text-slate-400 font-bold text-xs uppercase mb-3 text-center">Progresso da Sala</h3>
+        <div className="space-y-2">
+            {scoreboard.length === 0 ? <p className="text-slate-500 text-center text-xs">Aguardando jogadas...</p> : null}
+            
+            {scoreboard.map((p, i) => (
+                <div key={i} className="flex items-center justify-between bg-slate-700/50 p-2 rounded">
+                    <span className="text-white text-sm font-bold truncate max-w-[100px]">{p.nickname}</span>
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs text-slate-400">{p.attempts}/6</span>
+                        {p.status === 'WON' && <span className="text-green-500 text-xs">✔</span>}
+                        {p.status === 'LOST' && <span className="text-red-500 text-xs">✘</span>}
+                        {p.status === 'PLAYING' && <span className="text-yellow-500 text-xs animate-pulse">...</span>}
                     </div>
                 </div>
-            )}
-            
-            {status !== 'PLAYING' && phase === 'PLAYING' && (
-                <div className="text-center animate-pulse text-slate-400 mt-4 bg-slate-800 px-4 py-2 rounded-full text-xs md:text-sm">
-                    Aguardando outros jogadores terminarem...
-                </div>
-            )}
+            ))}
         </div>
+      </div>
+
     </div>
   );
 }

@@ -81,20 +81,35 @@ io.on('connection', (socket) => {
 
   // 5. START GAME
   socket.on('start_game', ({ roomId }) => {
-      const room = rooms.get(roomId);
-      if (!room) return;
-      
-      // Validação de Host
-      const player = room.players.find(p => p.socketId === socket.id);
-      if (player && player.userId === room.hostId) {
-          const module = gameModules[room.gameType];
-          if (module) {
-              // Tenta achar a função de start correta
-              const startFn = module[`start${toPascalCase(room.gameType)}`] || module.startGame || module.startChaCafe;
-              if (typeof startFn === 'function') startFn(io, room, roomId);
-          }
-      }
-  });
+        const room = rooms[roomId];
+        if (!room) return;
+        
+        // Verifica se quem pediu é o Host
+        const player = room.players.find(p => p.socketId === socket.id);
+        if (!player || !player.isHost) return;
+
+        // LÓGICA DE INICIALIZAÇÃO POR JOGO
+        if (room.gameType === 'TERMO') {
+            const termoGame = require('./games/game_termo');
+            const initialState = termoGame.initGame(room);
+            room.phase = initialState.phase;
+        } 
+        // Adicione outros 'else if' para outros jogos aqui (MEGAQUIZ, etc)
+        else {
+            // Fallback para jogos que ainda não tem init
+            room.phase = 'PLAYING';
+        }
+
+        // Avisa a todos para mudarem de tela
+        io.to(roomId).emit('joined_room', {
+            roomId: room.id,
+            players: room.players,
+            gameType: room.gameType,
+            phase: room.phase,
+            // Envia dados iniciais se houver
+            gameData: room.state 
+        });
+    });
 
   // 6. EVENTOS DE JOGO GENÉRICOS
   const handleReset = ({ roomId }) => {
