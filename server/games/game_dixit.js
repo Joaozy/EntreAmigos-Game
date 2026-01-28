@@ -1,180 +1,217 @@
 const { shuffle } = require('../utils/helpers');
-const HAND_SIZE = 6;
-const TARGET_SCORE = 30; 
-const TOTAL_CARDS = 216; 
+const RoomManager = require('../managers/RoomManager');
 
-module.exports = (io, socket, rooms) => {
-    socket.on('dixit_sync_state', ({ roomId }) => {
-        const room = rooms[roomId]; // CORRIGIDO
-        if (room && room.gameType === 'DIXIT') sendPrivateData(io, room, socket.id);
+module.exports = (io, socket, RoomManager) => {
+
+    // 1. NARRADOR ENVIA CARTA E FRASE
+    socket.on('dixit_narrate', async ({ roomId, cardId, phrase }) => {
+        try {
+            const room = await RoomManager.getRoom(roomId);
+            if(!room || room.state.phase !== 'STORY') return;
+            if(socket.data.userId !== room.state.storytellerId) return;
+
+            // Remove carta da mão
+            const p = room.players.find(pl => pl.userId === socket.data.userId);
+            if(p && p.hand) p.hand = p.hand.filter(c => c !== cardId);
+            
+            room.state.storyCard = cardId;
+            room.state.phrase = phrase;
+            room.state.tableCards.push({ cardId, ownerId: socket.data.userId });
+            room.state.phase = 'SELECTION';
+
+            await RoomManager.saveRoom(room);
+            await broadcastUpdate(io, room);
+        } catch(e) { console.error(e); }
     });
 
-    socket.on('dixit_set_clue', ({ roomId, cardId, clue }) => {
-        const room = rooms[roomId]; // CORRIGIDO
-        if (!room) return;
-        const gd = room.state;
-        const hand = gd.hands[socket.id];
-        const idx = hand.indexOf(cardId);
-        if (idx === -1) return;
-        
-        hand.splice(idx, 1);
-        gd.clue = clue;
-        gd.tableCards.push({ id: cardId, ownerId: socket.id });
-        nextPhase(io, room, roomId);
-    });
+    // 2. OUTROS JOGADORES ESCOLHEM CARTA
+    socket.on('dixit_select_card', async ({ roomId, cardId }) => {
+        try {
+            const room = await RoomManager.getRoom(roomId);
+            if(!room || room.state.phase !== 'SELECTION') return;
+            
+            if(room.state.tableCards.some(tc => tc.ownerId === socket.data.userId)) return;
 
-    socket.on('dixit_play_card', ({ roomId, cardId }) => {
-        const room = rooms[roomId]; // CORRIGIDO
-        if (!room) return;
-        const gd = room.state;
-        if (gd.tableCards.some(c => c.ownerId === socket.id)) return;
+            const p = room.players.find(pl => pl.userId === socket.data.userId);
+            if(!p || !p.hand.includes(cardId)) return;
 
-        const hand = gd.hands[socket.id];
-        const idx = hand.indexOf(cardId);
-        if (idx === -1) return;
-        
-        hand.splice(idx, 1);
-        gd.tableCards.push({ id: cardId, ownerId: socket.id });
-        
-        if (gd.tableCards.length === room.players.length) nextPhase(io, room, roomId);
-        else updateGame(io, room, roomId);
-    });
+            p.hand = p.hand.filter(c => c !== cardId);
+            room.state.tableCards.push({ cardId, ownerId: socket.data.userId });
 
-    socket.on('dixit_vote', ({ roomId, cardId }) => {
-        const room = rooms[roomId]; // CORRIGIDO
-        if (!room) return;
-        if (socket.id === room.state.narratorId || room.state.votes[socket.id]) return;
-        
-        room.state.votes[socket.id] = cardId;
-        if (Object.keys(room.state.votes).length >= room.players.length - 1) nextPhase(io, room, roomId);
-        else updateGame(io, room, roomId);
-    });
-
-    socket.on('dixit_next_round', ({ roomId }) => {
-        const room = rooms[roomId]; // CORRIGIDO
-        if (room) nextPhase(io, room, roomId);
-    });
-};
-
-module.exports.initGame = (room) => {
-    const deck = Array.from({ length: TOTAL_CARDS }, (_, i) => i + 1);
-    room.state = {
-        deck: shuffle(deck),
-        discardPile: [], 
-        round: 1,
-        targetScore: TARGET_SCORE,
-        votingDeadline: null, 
-        narratorIndex: 0,
-        narratorId: room.players[0].socketId,
-        phase: 'NARRATOR',
-        clue: '',
-        tableCards: [], votes: {}, scores: {}, hands: {}, roundScores: {}
-    };
-    room.players.forEach(p => { room.state.scores[p.socketId] = 0; room.state.hands[p.socketId] = []; });
-    dealCards(room);
-    return { phase: 'NARRATOR', gameData: getPublicData(room.state) };
-};
-
-function dealCards(room) {
-    const gd = room.state;
-    room.players.forEach(p => {
-        if (!gd.hands[p.socketId]) gd.hands[p.socketId] = [];
-        const hand = gd.hands[p.socketId];
-        while (hand.length < HAND_SIZE) {
-            if (gd.deck.length === 0) {
-                if (gd.discardPile.length === 0) break;
-                gd.deck = shuffle([...gd.discardPile]);
-                gd.discardPile = [];
+            if (room.state.tableCards.length === room.players.length) {
+                room.state.phase = 'VOTING';
+                room.state.tableCards = shuffle(room.state.tableCards);
             }
-            hand.push(gd.deck.pop());
+
+            await RoomManager.saveRoom(room);
+            await broadcastUpdate(io, room);
+        } catch(e) { console.error(e); }
+    });
+
+    // 3. VOTAÇÃO
+    socket.on('dixit_vote', async ({ roomId, cardId }) => {
+        try {
+            const room = await RoomManager.getRoom(roomId);
+            if(!room || room.state.phase !== 'VOTING') return;
+            
+            if(socket.data.userId === room.state.storytellerId) return;
+            
+            const myCard = room.state.tableCards.find(c => c.ownerId === socket.data.userId);
+            if(myCard && myCard.cardId === cardId) return;
+
+            room.state.votes[socket.data.userId] = cardId;
+
+            const votersCount = room.players.length - 1;
+            if (Object.keys(room.state.votes).length >= votersCount) {
+                calculateScores(room);
+                room.state.phase = 'SCORING';
+            }
+
+            await RoomManager.saveRoom(room);
+            await broadcastUpdate(io, room);
+        } catch(e) { console.error(e); }
+    });
+
+    // 4. PRÓXIMA RODADA
+    socket.on('dixit_next', async ({ roomId }) => {
+        try {
+            const room = await RoomManager.getRoom(roomId);
+            if(room && room.players.find(p=>p.userId === socket.data.userId)?.isHost) {
+                await startNextRound(io, room);
+            }
+        } catch(e) { console.error(e); }
+    });
+};
+
+// --- LOGICA ---
+
+module.exports.initGame = (room, io) => {
+    // Deck de 1 a 216 (assumindo que as imagens existem)
+    const deck = shuffle(Array.from({length: 216}, (_, i) => i + 1));
+    
+    room.players.forEach(p => {
+        p.hand = deck.splice(0, 6);
+        p.score = 0;
+    });
+
+    room.state = {
+        deck,
+        storytellerId: room.players[0].userId,
+        storyCard: null,
+        phrase: '',
+        tableCards: [], 
+        votes: {},
+        phase: 'STORY',
+        roundLog: []
+    };
+
+    return { phase: 'STORY', gameData: getPublicData(room.state, null) };
+};
+
+async function startNextRound(io, room) {
+    room.players.forEach(p => {
+        while(p.hand.length < 6 && room.state.deck.length > 0) {
+            p.hand.push(room.state.deck.pop());
         }
     });
-}
 
-function sendPrivateData(io, room, targetSocketId = null) {
-    const playersToSend = targetSocketId ? room.players.filter(p => p.socketId === targetSocketId) : room.players;
-    playersToSend.forEach(p => {
-        const hand = room.state.hands[p.socketId] || [];
-        io.to(p.socketId).emit('dixit_hand', hand);
-        const myCard = room.state.tableCards.find(c => c.ownerId === p.socketId);
-        io.to(p.socketId).emit('dixit_my_card', myCard ? myCard.id : null);
-    });
-}
+    const currentIdx = room.players.findIndex(p => p.userId === room.state.storytellerId);
+    const nextIdx = (currentIdx + 1) % room.players.length;
+    
+    room.state.storytellerId = room.players[nextIdx].userId;
+    room.state.storyCard = null;
+    room.state.phrase = '';
+    room.state.tableCards = [];
+    room.state.votes = {};
+    room.state.phase = 'STORY';
+    room.state.roundLog = [];
 
-function updateGame(io, room, roomId) {
-    io.to(roomId).emit('update_game_data', { gameData: getPublicData(room.state), phase: room.state.phase });
-    sendPrivateData(io, room);
-}
-
-function nextPhase(io, room, roomId) {
-    const gd = room.state;
-    if (gd.phase === 'NARRATOR') {
-        gd.phase = 'PLAYS';
-    } else if (gd.phase === 'PLAYS') {
-        gd.tableCards = shuffle(gd.tableCards);
-        gd.phase = 'VOTING';
-        gd.votingDeadline = Date.now() + 60000;
-    } else if (gd.phase === 'VOTING') {
-        calculateScores(room);
-        const winnerId = Object.keys(gd.scores).reduce((a, b) => gd.scores[a] > gd.scores[b] ? a : b);
-        if (gd.scores[winnerId] >= gd.targetScore) {
-            const winner = room.players.find(p => p.socketId === winnerId);
-            io.to(roomId).emit('game_over', { winner, gameData: getPublicData(gd), phase: 'VICTORY' });
-            return;
-        }
-        gd.phase = 'SCORING'; gd.votingDeadline = null;
-    } else if (gd.phase === 'SCORING') {
-        gd.tableCards.forEach(c => gd.discardPile.push(c.id));
-        gd.round++;
-        gd.narratorIndex = (gd.narratorIndex + 1) % room.players.length;
-        gd.narratorId = room.players[gd.narratorIndex].socketId;
-        gd.clue = ''; gd.tableCards = []; gd.votes = {}; gd.roundScores = {}; gd.phase = 'NARRATOR';
-        dealCards(room);
-    }
-    updateGame(io, room, roomId);
+    await RoomManager.saveRoom(room);
+    await broadcastUpdate(io, room);
 }
 
 function calculateScores(room) {
     const gd = room.state;
-    const narratorId = gd.narratorId;
-    const narratorCard = gd.tableCards.find(c => c.ownerId === narratorId);
-    gd.roundScores = {}; 
-    room.players.forEach(p => gd.roundScores[p.socketId] = 0);
-    if (!narratorCard) return;
+    const votes = Object.values(gd.votes);
+    const storyCard = gd.storyCard;
+    
+    const correctVotes = votes.filter(v => v === storyCard).length;
+    const totalVoters = room.players.length - 1;
 
-    let votesOnNarrator = 0;
-    Object.values(gd.votes).forEach(cardId => { if (cardId === narratorCard.id) votesOnNarrator++; });
-    const othersCount = room.players.length - 1;
-
-    if (votesOnNarrator === othersCount || votesOnNarrator === 0) {
-        room.players.forEach(p => { 
-            if (p.socketId !== narratorId) { gd.scores[p.socketId] += 2; gd.roundScores[p.socketId] += 2; }
+    if (correctVotes === 0 || correctVotes === totalVoters) {
+        room.players.forEach(p => {
+            if (p.userId !== gd.storytellerId) p.score += 2;
         });
+        gd.roundLog.push("Todos ou Ninguém acertou! Narrador: 0, Outros: +2");
     } else {
-        gd.scores[narratorId] += 3; gd.roundScores[narratorId] += 3;
-        Object.entries(gd.votes).forEach(([voterId, cardId]) => { 
-            if (cardId === narratorCard.id) { gd.scores[voterId] += 3; gd.roundScores[voterId] += 3; }
+        const narrator = room.players.find(p => p.userId === gd.storytellerId);
+        if(narrator) narrator.score += 3;
+        
+        Object.entries(gd.votes).forEach(([voterId, cardId]) => {
+            if (cardId === storyCard) {
+                const p = room.players.find(pl => pl.userId === voterId);
+                if(p) p.score += 3;
+            }
         });
+        gd.roundLog.push(`Narrador pontua! (${correctVotes} acertos)`);
     }
+
     Object.entries(gd.votes).forEach(([voterId, cardId]) => {
-        if (cardId !== narratorCard.id) {
-            const cardOwner = gd.tableCards.find(c => c.id === cardId)?.ownerId;
-            if (cardOwner && cardOwner !== voterId && cardOwner !== narratorId) {
-                gd.scores[cardOwner] += 1; gd.roundScores[cardOwner] += 1;
+        if (cardId !== storyCard) {
+            const ownerEntry = gd.tableCards.find(c => c.cardId === cardId);
+            if (ownerEntry && ownerEntry.ownerId !== gd.storytellerId) {
+                const owner = room.players.find(p => p.userId === ownerEntry.ownerId);
+                if(owner) owner.score += 1;
             }
         }
     });
 }
 
-function getPublicData(gd) {
-    let publicTableCards = [];
-    if (gd.phase === 'PLAYS') publicTableCards = gd.tableCards.map(c => ({ id: null, ownerId: c.ownerId, status: 'played' }));
-    else if (gd.phase === 'VOTING') publicTableCards = gd.tableCards.map(c => ({ id: c.id, ownerId: null }));
-    else publicTableCards = gd.tableCards;
+// --- CORREÇÃO AQUI: PROTEÇÃO CONTRA ESTADO VAZIO ---
+function getPublicData(gd, userId) {
+    if (!gd) return {};
+    
+    // Se o jogo não começou (Lobby), não tem tableCards ainda. Retorna vazio.
+    if (!gd.tableCards) return { phase: 'LOBBY' };
+
+    const isVoting = gd.phase === 'VOTING';
+    const isScoring = gd.phase === 'SCORING';
+    
+    const publicTableCards = gd.tableCards.map(c => {
+        if (isScoring) return c; 
+        if (isVoting) return { cardId: c.cardId, ownerId: null }; 
+        return { cardId: 'BACK', ownerId: c.ownerId }; 
+    });
 
     return {
-        round: gd.round, phase: gd.phase, narratorId: gd.narratorId, clue: gd.clue, tableCards: publicTableCards,
-        votes: (gd.phase === 'SCORING' || gd.phase === 'VICTORY') ? gd.votes : {},
-        scores: gd.scores, roundScores: gd.roundScores, targetScore: gd.targetScore, votingDeadline: gd.votingDeadline
+        ...gd,
+        deck: undefined, 
+        tableCards: publicTableCards,
+        myHand: null
     };
 }
+
+async function broadcastUpdate(io, room) {
+    const sockets = await io.in(room.id).fetchSockets();
+    for(const s of sockets) {
+        const myPlayer = room.players.find(p => p.userId === s.data.userId);
+        const myHand = myPlayer ? myPlayer.hand : [];
+        
+        const safePlayers = room.players.map(p => ({
+            ...p,
+            hand: undefined 
+        }));
+
+        const publicData = getPublicData(room.state, s.data.userId);
+        
+        s.emit('joined_room', {
+            roomId: room.id,
+            players: safePlayers, 
+            gameType: 'DIXIT',
+            phase: room.state.phase,
+            gameData: { ...publicData, myHand } 
+        });
+    }
+}
+
+module.exports.getPublicData = getPublicData;

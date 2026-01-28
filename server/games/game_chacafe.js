@@ -1,75 +1,178 @@
-const PAIRS = [
-    ["Chá", "Café"], ["Praia", "Montanha"], ["Cachorro", "Gato"],
-    ["Dia", "Noite"], ["Marvel", "DC"], ["Doce", "Salgado"],
-    ["Pizza", "Hambúrguer"], ["Série", "Filme"], ["Livro", "Kindle"]
-];
+const { normalize } = require('../utils/helpers');
+const RoomManager = require('../managers/RoomManager');
 
-module.exports = (io, socket, rooms) => {
-    socket.on('cc_select', ({ roomId, index }) => {
-        const room = rooms[roomId]; // CORRIGIDO
-        if (!room) return;
-        
-        if (socket.data.userId === room.state.narratorUserId) {
-            room.state.selectedOptionIndex = index;
-            room.state.phase = 'GUESSING';
-            io.to(roomId).emit('update_game_data', { gameData: getPublicData(room.state), phase: 'GUESSING' });
-        }
-    });
-
-    socket.on('cc_guess', ({ roomId, word }) => {
-        const room = rooms[roomId]; // CORRIGIDO
-        if (!room) return;
-
-        if (socket.data.userId === room.state.guesserUserId) {
-            room.state.guesserWord = word;
-            room.state.phase = 'RESULT';
-            io.to(roomId).emit('update_game_data', { gameData: getPublicData(room.state), phase: 'RESULT' });
-        }
-    });
-
-    socket.on('cc_next', ({ roomId }) => {
-        const room = rooms[roomId]; // CORRIGIDO
-        if (!room) return;
-
-        if (socket.data.userId === room.state.narratorUserId) {
-            startNextRound(room);
-            io.to(roomId).emit('update_game_data', { gameData: getPublicData(room.state), phase: 'SELECTION' });
-        }
-    });
-};
-
-function startNextRound(room) {
-    if (!room.players || room.players.length === 0) return;
-    const currentNarratorIdx = room.players.findIndex(p => p.userId === room.state.narratorUserId);
-    const nextNarratorIdx = (currentNarratorIdx + 1) % room.players.length;
-    const nextGuesserIdx = (nextNarratorIdx + 1) % room.players.length;
-
-    room.state.narratorUserId = room.players[nextNarratorIdx].userId;
-    room.state.guesserUserId = room.players[nextGuesserIdx].userId;
-    room.state.options = PAIRS[Math.floor(Math.random() * PAIRS.length)];
-    room.state.selectedOptionIndex = null;
-    room.state.guesserWord = null;
-    room.state.phase = 'SELECTION';
-    room.state.round = (room.state.round || 0) + 1;
+// Banco de palavras padrão (Fallback)
+let WORDS = ["Futebol", "Internet", "Amor", "Brasil", "Cerveja", "Dinheiro", "Música", "Praia", "Natal", "Carnaval", "Escola"];
+try {
+    const loaded = require('../data/words.json');
+    if (Array.isArray(loaded) && loaded.length > 0) WORDS = loaded;
+} catch (e) {
+    console.log("[CHA_CAFE] Usando lista padrão.");
 }
 
-module.exports.initGame = (room) => {
-    room.state = { round: 0 };
-    const lastIdx = room.players.length - 1;
-    room.state.narratorUserId = room.players[lastIdx].userId; 
-    startNextRound(room);
-    return { phase: 'SELECTION', gameData: getPublicData(room.state) };
+module.exports = (io, socket, RoomManager) => {
+
+    // 1. SETUP: Narrador escolhe Chá ou Café
+    socket.on('cc_setup', async ({ roomId, choice }) => { // choice = 'Chá' ou 'Café'
+        try {
+            const room = await RoomManager.getRoom(roomId);
+            if (!room || room.state.phase !== 'SETUP') return;
+            
+            if (socket.data.userId === room.state.narratorId) {
+                room.state.currentBestWord = choice;
+                room.state.history.push({ type: 'start', word: choice });
+                
+                // Avança para o primeiro jogador chutar
+                room.state.phase = 'GUESSING';
+                
+                await RoomManager.saveRoom(room);
+                await broadcastUpdate(io, room);
+            }
+        } catch(e) { console.error(e); }
+    });
+
+    // 2. GUESS: Jogador da vez chuta uma palavra
+    socket.on('cc_guess', async ({ roomId, guess }) => {
+        try {
+            const room = await RoomManager.getRoom(roomId);
+            if (!room || room.state.phase !== 'GUESSING') return;
+
+            // Valida se é a vez do jogador
+            const currentGuesserId = room.state.turnQueue[room.state.turnIndex];
+            if (socket.data.userId !== currentGuesserId) return;
+
+            const guessNorm = normalize(guess);
+            const secretNorm = normalize(room.state.secretWord);
+
+            // VERIFICA VITÓRIA
+            if (guessNorm === secretNorm) {
+                room.state.phase = 'WIN';
+                room.state.winnerId = socket.data.userId;
+                room.state.currentBestWord = room.state.secretWord; // Revela
+                
+                await RoomManager.saveRoom(room);
+                await broadcastUpdate(io, room);
+                return;
+            }
+
+            // SE ERROU: Vai para comparação
+            room.state.pendingGuess = guess; // Palavra nova esperando julgamento
+            room.state.guesserId = socket.data.userId; // Quem chutou
+            room.state.phase = 'COMPARISON'; // Narrador precisa trabalhar agora
+
+            await RoomManager.saveRoom(room);
+            await broadcastUpdate(io, room);
+
+        } catch(e) { console.error(e); }
+    });
+
+    // 3. COMPARE: Narrador escolhe a melhor palavra
+    socket.on('cc_compare', async ({ roomId, choice }) => { // choice = currentBestWord OU pendingGuess
+        try {
+            const room = await RoomManager.getRoom(roomId);
+            if (!room || room.state.phase !== 'COMPARISON') return;
+
+            if (socket.data.userId === room.state.narratorId) {
+                // Registra no histórico o duelo
+                const loser = (choice === room.state.currentBestWord) ? room.state.pendingGuess : room.state.currentBestWord;
+                room.state.history.push({ 
+                    winner: choice, 
+                    loser: loser,
+                    guesser: room.players.find(p => p.userId === room.state.guesserId)?.nickname 
+                });
+
+                // Atualiza a melhor palavra
+                room.state.currentBestWord = choice;
+                room.state.pendingGuess = null;
+
+                // Passa a vez para o próximo jogador
+                room.state.turnIndex = (room.state.turnIndex + 1) % room.state.turnQueue.length;
+                room.state.phase = 'GUESSING';
+
+                await RoomManager.saveRoom(room);
+                await broadcastUpdate(io, room);
+            }
+        } catch(e) { console.error(e); }
+    });
+
+    // 4. RESTART
+    socket.on('cc_restart', async ({ roomId }) => {
+        try {
+            const room = await RoomManager.getRoom(roomId);
+            if(room && room.players.find(p => p.socketId === socket.id)?.isHost) {
+                module.exports.initGame(room, io);
+                await RoomManager.saveRoom(room);
+                await broadcastUpdate(io, room);
+            }
+        } catch(e) { console.error(e); }
+    });
 };
 
-function getPublicData(gd) {
+// --- INICIALIZAÇÃO ---
+module.exports.initGame = (room, io) => {
+    // Escolhe Narrador (o primeiro da lista ou o próximo se estiver rodando)
+    // Para simplificar, vamos rodar o narrador:
+    let nextNarratorIdx = 0;
+    if (room.state && room.state.narratorId) {
+        const oldIdx = room.players.findIndex(p => p.userId === room.state.narratorId);
+        nextNarratorIdx = (oldIdx + 1) % room.players.length;
+    }
+    const narrator = room.players[nextNarratorIdx];
+
+    // Fila de jogadores (todos menos o narrador)
+    const turnQueue = room.players
+        .filter(p => p.userId !== narrator.userId)
+        .map(p => p.userId);
+
+    const secretWord = WORDS[Math.floor(Math.random() * WORDS.length)];
+
+    room.state = {
+        narratorId: narrator.userId,
+        secretWord: secretWord, // Palavra Alvo
+        currentBestWord: null,  // Começa null, Narrador define no SETUP
+        pendingGuess: null,     // Palavra sendo julgada
+        turnQueue: turnQueue,
+        turnIndex: 0,           // Quem chuta agora
+        history: [],            // Log dos duelos
+        phase: 'SETUP',         // Setup -> Guessing -> Comparison -> Win
+        round: (room.state?.round || 0) + 1
+    };
+
+    return { phase: 'SETUP', gameData: getPublicData(room.state, null) };
+};
+
+// --- DADOS PÚBLICOS ---
+function getPublicData(gd, userId) {
     if (!gd) return {};
+    
+    // O segredo só é revelado no final ou para o Narrador
+    const isNarrator = userId === gd.narratorId;
+    const isWin = gd.phase === 'WIN';
+
     return {
-        options: gd.options,
-        selectedOptionIndex: (gd.phase === 'RESULT') ? gd.selectedOptionIndex : null,
-        narratorUserId: gd.narratorUserId,
-        guesserUserId: gd.guesserUserId,
-        guesserWord: gd.guesserWord,
         phase: gd.phase,
-        round: gd.round
+        narratorId: gd.narratorId,
+        currentBestWord: gd.currentBestWord,
+        pendingGuess: gd.pendingGuess,
+        currentGuesserId: gd.turnQueue ? gd.turnQueue[gd.turnIndex] : null,
+        history: gd.history,
+        winnerId: gd.winnerId,
+        // Narrador vê a palavra o tempo todo. Outros só no final.
+        secretWord: (isNarrator || isWin) ? gd.secretWord : null 
     };
 }
+
+async function broadcastUpdate(io, room) {
+    const sockets = await io.in(room.id).fetchSockets();
+    for(const s of sockets) {
+        s.emit('joined_room', {
+            roomId: room.id,
+            players: room.players,
+            gameType: 'CHA_CAFE',
+            phase: room.state.phase,
+            gameData: getPublicData(room.state, s.data.userId)
+        });
+    }
+}
+
+module.exports.getPublicData = getPublicData;

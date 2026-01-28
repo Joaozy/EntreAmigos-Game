@@ -1,6 +1,11 @@
 const { shuffle, normalize } = require('../utils/helpers');
+const RoomManager = require('../managers/RoomManager');
 
-// Fallback Temas
+// --- GERENCIADOR DE TIMERS (MEMÓRIA RAM) ---
+// O Redis guarda dados, mas o relógio precisa viver no processo Node.js
+const activeTimers = {}; // { roomId: intervalId }
+
+// --- TEMAS (COM FALLBACK) ---
 let THEMES = [
     { emojis: "🦁👑", answers: ["O Rei Leão", "Rei Leao"] },
     { emojis: "🚢🧊💔", answers: ["Titanic"] },
@@ -10,8 +15,11 @@ let THEMES = [
 try {
     const loaded = require('../data/themes_cinemoji.json');
     if (Array.isArray(loaded) && loaded.length > 0) THEMES = loaded;
-} catch (e) {}
+} catch (e) {
+    console.log("[CINEMOJI] Usando temas padrão.");
+}
 
+// --- FUNÇÕES AUXILIARES ---
 const getLevenshteinDistance = (a, b) => {
     if(a.length === 0) return b.length;
     if(b.length === 0) return a.length;
@@ -36,10 +44,12 @@ const generateHint = (title) => {
     }).join(' ');
 };
 
-module.exports = (io, socket, rooms) => {
-    socket.on('cinemoji_guess', ({ roomId, guess }) => {
+// --- MÓDULO PRINCIPAL ---
+module.exports = (io, socket, RoomManager) => {
+
+    socket.on('cinemoji_guess', async ({ roomId, guess }) => {
         try {
-            const room = rooms[roomId];
+            const room = await RoomManager.getRoom(roomId);
             if (!room || !room.state || room.state.phase !== 'GUESSING') return;
             
             const gd = room.state;
@@ -54,18 +64,25 @@ module.exports = (io, socket, rooms) => {
             // 1. ACERTOU
             if (validAnswers.includes(userGuessNorm)) {
                 if (!gd.winners.includes(player.nickname)) {
+                    // Pontuação
                     let basePoints = gd.winners.length === 0 ? 10 : (gd.winners.length === 1 ? 5 : 3);
                     if (gd.hintRevealed) basePoints = Math.ceil(basePoints / 2);
 
                     player.score = (player.score || 0) + basePoints;
                     gd.winners.push(player.nickname);
                     
+                    await RoomManager.saveRoom(room);
+
                     io.to(roomId).emit('receive_message', { nickname: 'SISTEMA', text: `🎉 ${player.nickname} acertou!` });
                     io.to(roomId).emit('update_players', room.players);
+                    
+                    // Atualiza dados (incluindo vencedores)
                     io.to(roomId).emit('update_game_data', { gameData: getPublicData(room.state), phase: 'GUESSING' });
 
-                    if (gd.winners.length === room.players.length) {
-                        endRound(io, room, roomId);
+                    // Se todos acertaram (quem está online)
+                    const activePlayers = room.players.filter(p => p.isOnline !== false);
+                    if (gd.winners.length >= activePlayers.length) {
+                        await endRound(io, roomId);
                     }
                 }
                 return;
@@ -83,49 +100,75 @@ module.exports = (io, socket, rooms) => {
             if (isClose) socket.emit('cinemoji_close', 'Quase lá!');
             else socket.emit('cinemoji_wrong');
 
-        } catch (error) { console.error("[CINEMOJI] Erro:", error); }
+        } catch (error) { console.error("[CINEMOJI] Erro no guess:", error); }
     });
 };
 
-function endRound(io, room, roomId) {
-    const gd = room.state;
-    if (gd.timer) clearInterval(gd.timer);
-    gd.phase = 'REVEAL';
-    io.to(roomId).emit('update_game_data', { gameData: getPublicData(room.state), phase: 'REVEAL' });
+// --- CONTROLE DE FLUXO E TEMPO ---
+
+async function endRound(io, roomId) {
+    // 1. Limpa timer na memória
+    if (activeTimers[roomId]) {
+        clearInterval(activeTimers[roomId]);
+        delete activeTimers[roomId];
+    }
+
+    const room = await RoomManager.getRoom(roomId);
+    if (!room) return;
     
-    // Próxima rodada automática após 5s
-    setTimeout(() => {
-        // Chama initGame passando IO para iniciar o próximo timer
-        const nextState = module.exports.initGame(room, io); 
-        
+    const gd = room.state;
+    gd.phase = 'REVEAL';
+    
+    await RoomManager.saveRoom(room);
+
+    // Revela resposta
+    io.to(roomId).emit('update_game_data', { gameData: getPublicData(gd), phase: 'REVEAL' });
+    
+    // Espera 5s e começa próxima
+    setTimeout(async () => {
+        const currentRoom = await RoomManager.getRoom(roomId);
+        if(!currentRoom) return;
+
+        const nextState = module.exports.initGame(currentRoom, io); 
+        await RoomManager.saveRoom(currentRoom);
+
         if (nextState.phase === 'GAME_OVER') {
-             const winner = room.players.sort((a,b) => b.score - a.score)[0];
-             io.to(roomId).emit('game_over', { winner, results: room.players });
+             const winner = currentRoom.players.sort((a,b) => b.score - a.score)[0];
+             io.to(roomId).emit('game_over', { winner, results: currentRoom.players });
+             // Limpa dados da sala se quiser
+             // RoomManager.deleteRoom(roomId);
         } else {
-             // Atualiza todos com o novo estado
-             io.to(roomId).emit('update_game_data', { gameData: nextState.gameData, phase: 'GUESSING' });
+             io.to(roomId).emit('joined_room', {
+                 roomId: currentRoom.id,
+                 players: currentRoom.players,
+                 gameType: 'CINEMOJI',
+                 phase: 'GUESSING',
+                 gameData: nextState.gameData
+             });
         }
     }, 5000);
 }
 
-// Inicializador (Recebe IO para iniciar timers)
+// Chamado pelo server.js (start_game) e internamente (next round)
 module.exports.initGame = (room, io) => {
-    // Inicializa estado se não existir
+    // Setup inicial
     if(!room.state || !room.state.deck) {
         room.state = {
             deck: shuffle([...THEMES]),
             currentTheme: null,
             round: 0,
             winners: [],
-            timer: null
+            hintRevealed: false
         };
         room.players.forEach(p => p.score = 0);
     }
 
     const gd = room.state;
+    
+    // Verifica Fim de Jogo
     if (gd.deck.length === 0) return { phase: 'GAME_OVER' };
 
-    // Configura nova rodada
+    // Nova Rodada
     gd.round++;
     gd.currentTheme = gd.deck.pop();
     gd.phase = 'GUESSING';
@@ -133,9 +176,9 @@ module.exports.initGame = (room, io) => {
     gd.hintRevealed = false;
     gd.hint = generateHint(gd.currentTheme.answers[0]);
 
-    // Inicia Timer se IO foi passado
+    // Inicia Timer se tiver IO
     if (io) {
-        startRoundLoop(io, room, room.id);
+        startRoundLoop(io, room.id);
     }
 
     return { 
@@ -144,28 +187,47 @@ module.exports.initGame = (room, io) => {
     };
 };
 
-function startRoundLoop(io, room, roomId) {
-    const gd = room.state;
+function startRoundLoop(io, roomId) {
+    // 1. Limpa anterior se existir (Segurança)
+    if (activeTimers[roomId]) {
+        clearInterval(activeTimers[roomId]);
+    }
+
     let timeLeft = 60;
-    
-    if(gd.timer) clearInterval(gd.timer);
-    gd.timer = setInterval(() => {
+    console.log(`[CINEMOJI] Timer iniciado para sala ${roomId} (${timeLeft}s)`);
+
+    // 2. Cria novo Timer
+    const timerId = setInterval(async () => {
         timeLeft--;
+        
+        // Emite tempo real (apenas socket, não salva no redis pra não pesar)
         io.to(roomId).emit('cinemoji_timer', timeLeft);
 
-        if (timeLeft === 30 && !gd.hintRevealed) {
-            gd.hintRevealed = true;
-            io.to(roomId).emit('cinemoji_hint', gd.hint);
+        // Evento de Dica (30s)
+        if (timeLeft === 30) {
+            const room = await RoomManager.getRoom(roomId);
+            if(room && room.state) {
+                room.state.hintRevealed = true;
+                await RoomManager.saveRoom(room);
+                io.to(roomId).emit('cinemoji_hint', room.state.hint);
+                console.log(`[CINEMOJI] Dica revelada sala ${roomId}`);
+            }
         }
 
+        // Fim do Tempo
         if (timeLeft <= 0) {
-            endRound(io, room, roomId);
+            clearInterval(timerId); // Limpa intervalo local
+            if (activeTimers[roomId] === timerId) delete activeTimers[roomId]; // Limpa referência do mapa
+            await endRound(io, roomId);
         }
     }, 1000);
+
+    // 3. Salva referência na memória
+    activeTimers[roomId] = timerId;
 }
 
 function getPublicData(gd) {
-    if (!gd.currentTheme) return {};
+    if (!gd || !gd.currentTheme) return {};
     return {
         emojis: gd.currentTheme.emojis,
         title: gd.phase === 'REVEAL' ? gd.currentTheme.answers[0] : null, 

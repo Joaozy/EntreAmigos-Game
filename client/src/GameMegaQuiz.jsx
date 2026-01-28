@@ -1,12 +1,16 @@
 import React, { useState, useEffect } from 'react';
+import { useGame } from './context/GameContext'; 
 import { socket } from './socket';
-import { Trophy, Clock, CheckCircle, XCircle, Play, Home, RotateCcw } from 'lucide-react';
+import { Trophy, Clock, CheckCircle, XCircle, Home, RotateCcw, LogOut } from 'lucide-react';
 
-export default function GameMegaQuiz({ players, isHost, roomId, gameData, currentPhase }) {
-    const [timer, setTimer] = useState(0);
+export default function GameMegaQuiz() {
+    const { roomId, isHost, gameData, players, currentPhase, sairDoJogo } = useGame();
+    
+    const [timer, setTimer] = useState(20);
     const [selectedOption, setSelectedOption] = useState(null);
     const [lastRoundResult, setLastRoundResult] = useState(null);
 
+    // Listeners
     useEffect(() => {
         const onTimer = (t) => setTimer(t);
         const onRoundEnd = (data) => setLastRoundResult(data);
@@ -20,10 +24,11 @@ export default function GameMegaQuiz({ players, isHost, roomId, gameData, curren
         };
     }, []);
 
+    // Reset ao mudar de fase
     useEffect(() => {
-        if (currentPhase === 'QUESTION') {
+        if (currentPhase === 'QUESTION' || currentPhase === 'PRE_ROUND') {
             setSelectedOption(null);
-            setLastRoundResult(null);
+            if(currentPhase === 'PRE_ROUND') setLastRoundResult(null);
         }
     }, [currentPhase]);
 
@@ -33,7 +38,7 @@ export default function GameMegaQuiz({ players, isHost, roomId, gameData, curren
         socket.emit('megaquiz_answer', { roomId, answerIdx: index });
     };
 
-    // TELA DE VITÓRIA / FIM DE JOGO
+    // --- TELA DE VITÓRIA ---
     if (currentPhase === 'VICTORY' || (gameData && gameData.winner)) {
         const winner = gameData.winner || players[0];
         
@@ -47,22 +52,10 @@ export default function GameMegaQuiz({ players, isHost, roomId, gameData, curren
                     
                     <div className="bg-slate-100 rounded-2xl p-6 my-6 border-2 border-slate-200">
                         <p className="text-slate-500 font-bold uppercase tracking-widest text-xs mb-1">Grande Vencedor</p>
-                        <p className="text-4xl font-black text-indigo-600">{winner.nickname}</p>
+                        <p className="text-4xl font-black text-indigo-600">{winner?.nickname || "..."}</p>
                         <div className="inline-block bg-yellow-400 text-black font-black px-4 py-1 rounded-full text-sm mt-2 shadow-sm">
-                            {gameData.mode === 'SURVIVAL' ? `${winner.lives} VIDAS` : `${winner.score} PONTOS`}
+                            {gameData.mode === 'SURVIVAL' ? `${winner.lives || 0} VIDAS` : `${winner.score} PONTOS`}
                         </div>
-                    </div>
-
-                    <div className="max-h-48 overflow-y-auto mb-8 space-y-2 custom-scrollbar">
-                        {players.sort((a,b) => b.score - a.score).map((p, i) => (
-                            <div key={p.id} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-100">
-                                <div className="flex items-center gap-3">
-                                    <span className={`font-mono font-bold w-6 text-center ${i===0 ? 'text-yellow-500 text-lg' : 'text-slate-400'}`}>{i+1}</span>
-                                    <span className="font-bold text-slate-700">{p.nickname}</span>
-                                </div>
-                                <span className="font-mono font-bold text-slate-600">{p.score}pts</span>
-                            </div>
-                        ))}
                     </div>
 
                     {isHost ? (
@@ -70,48 +63,54 @@ export default function GameMegaQuiz({ players, isHost, roomId, gameData, curren
                             <button onClick={() => socket.emit('request_restart', { roomId })} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 transition">
                                 <RotateCcw size={18}/> Reiniciar
                             </button>
-                            <button onClick={() => socket.emit('return_to_lobby', { roomId })} className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2 transition">
+                            <button onClick={sairDoJogo} className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2 transition">
                                 <Home size={18}/> Lobby
                             </button>
                         </div>
                     ) : (
-                        <p className="text-slate-400 text-sm font-bold animate-pulse">Aguardando o Host...</p>
+                        <button onClick={sairDoJogo} className="w-full bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-3 rounded-xl transition">Sair</button>
                     )}
                 </div>
             </div>
         );
     }
 
-    // TELA DE JOGO
+    // --- TELA DE JOGO ---
     return (
-        <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center p-4">
+        <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center p-4">
             {/* TOP BAR */}
-            <div className="w-full max-w-3xl flex justify-between items-center bg-slate-800 p-4 rounded-2xl mb-8 shadow-lg border border-slate-700">
+            <div className="w-full max-w-3xl flex justify-between items-center bg-slate-900 p-4 rounded-2xl mb-8 shadow-lg border border-slate-800">
                 <div className="flex items-center gap-3">
                     <div className="bg-purple-600 px-3 py-1 rounded-lg text-xs font-black uppercase tracking-wider shadow-inner">
                         {gameData?.mode === 'SURVIVAL' ? 'SOBREVIVÊNCIA' : 'CLÁSSICO'}
                     </div>
-                    <span className="text-slate-400 font-mono text-sm font-bold">Q.{gameData?.currentQuestionIndex + 1}</span>
+                    {gameData?.round && <span className="text-slate-400 font-mono text-sm font-bold">Rodada {gameData.round}</span>}
                 </div>
                 {currentPhase === 'QUESTION' && (
                     <div className={`flex items-center gap-2 font-mono font-black text-2xl ${timer <= 5 ? 'text-red-500 animate-pulse' : 'text-white'}`}>
                         <Clock size={24}/> {timer}
                     </div>
                 )}
+                <button onClick={sairDoJogo}><LogOut size={20} className="text-slate-500 hover:text-red-400"/></button>
             </div>
 
             <div className="w-full max-w-3xl flex-1 flex flex-col">
-                {/* PERGUNTA */}
+                {/* ÁREA DA PERGUNTA */}
                 {(currentPhase === 'QUESTION' || currentPhase === 'RESULT') && gameData?.currentQuestion ? (
                     <div className="animate-in fade-in zoom-in duration-300">
-                        <div className="bg-white text-slate-900 p-8 rounded-3xl shadow-2xl mb-6 min-h-[160px] flex items-center justify-center text-center relative overflow-hidden">
-                            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-purple-500 to-indigo-500"></div>
-                            <h2 className="text-2xl md:text-3xl font-black leading-snug">{gameData.currentQuestion.question}</h2>
+                        
+                        {/* CAIXA DA PERGUNTA (CORRIGIDA: Fundo Escuro + Borda Colorida) */}
+                        <div className="bg-slate-800 border-2 border-indigo-500 p-8 rounded-3xl shadow-2xl mb-6 min-h-[160px] flex items-center justify-center text-center relative overflow-hidden">
+                            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-purple-500 to-indigo-500"></div>
+                            {/* Texto Branco Forçado */}
+                            <h2 className="text-2xl md:text-3xl font-black leading-snug text-white">
+                                {gameData.currentQuestion.question || "Erro ao carregar texto da pergunta..."}
+                            </h2>
                         </div>
 
                         {/* OPÇÕES */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            {gameData.currentQuestion.options.map((opt, idx) => {
+                            {gameData.currentQuestion.options && gameData.currentQuestion.options.map((opt, idx) => {
                                 let btnClass = "bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200";
                                 let icon = null;
 
@@ -125,7 +124,8 @@ export default function GameMegaQuiz({ players, isHost, roomId, gameData, curren
                                     } else {
                                         btnClass = "bg-slate-800 opacity-40";
                                     }
-                                } else if (selectedOption === idx) {
+                                } 
+                                else if (selectedOption === idx) {
                                     btnClass = "bg-indigo-600 border-indigo-500 text-white ring-2 ring-indigo-400";
                                 }
 
@@ -144,40 +144,47 @@ export default function GameMegaQuiz({ players, isHost, roomId, gameData, curren
                         </div>
                     </div>
                 ) : (
-                    <div className="flex-1 flex flex-col items-center justify-center">
-                        <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-                        <p className="text-xl font-bold animate-pulse">Preparando próxima pergunta...</p>
+                    // PRE_ROUND
+                    <div className="flex-1 flex flex-col items-center justify-center text-slate-400">
+                        {currentPhase === 'PRE_ROUND' ? (
+                            <>
+                                <div className="text-4xl font-black text-white animate-bounce mb-4">PREPARE-SE</div>
+                                <p>Próxima pergunta em instantes...</p>
+                            </>
+                        ) : (
+                            <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+                        )}
                     </div>
                 )}
 
-                {/* FEEDBACK PÓS-RODADA */}
+                {/* RESULTADO DA RODADA */}
                 {currentPhase === 'RESULT' && lastRoundResult && (
                     <div className="mt-8 bg-black/40 backdrop-blur-md p-6 rounded-2xl border border-white/10 animate-in slide-in-from-bottom fade-in">
                         <h3 className="text-indigo-300 font-bold mb-3 uppercase tracking-widest text-sm">Resumo da Rodada</h3>
                         <div className="space-y-1">
-                            {lastRoundResult.logs?.slice(0, 3).map((log, i) => ( // Mostra só os top 3 logs
-                                <p key={i} className="text-sm text-slate-300 font-medium flex items-center gap-2">
-                                    <span className="w-1.5 h-1.5 rounded-full bg-slate-500"></span> {log}
+                            {lastRoundResult.logs?.slice(0, 3).map((log, i) => ( 
+                                <p key={i} className="text-sm text-red-300 font-medium flex items-center gap-2">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span> {log}
                                 </p>
                             ))}
-                            {lastRoundResult.logs?.length > 3 && <p className="text-xs text-slate-500 italic">...e mais.</p>}
+                            {lastRoundResult.logs?.length === 0 && <p className="text-sm text-green-300">Todos sobreviveram!</p>}
                         </div>
                     </div>
                 )}
             </div>
 
-            {/* RODAPÉ: AVATARES */}
+            {/* BARRA INFERIOR DE JOGADORES */}
             <div className="fixed bottom-0 left-0 w-full bg-slate-950/90 border-t border-slate-800 p-4 backdrop-blur-md z-10">
                 <div className="flex gap-4 overflow-x-auto justify-center no-scrollbar max-w-5xl mx-auto">
                     {players.map(p => (
-                        <div key={p.id} className={`flex flex-col items-center min-w-[60px] transition-opacity duration-500 ${p.lives <= 0 ? 'opacity-40 grayscale' : ''}`}>
+                        <div key={p.userId} className={`flex flex-col items-center min-w-[60px] transition-opacity duration-500 ${p.lives <= 0 && gameData.mode === 'SURVIVAL' ? 'opacity-40 grayscale' : ''}`}>
                             <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold mb-1 border-2 relative
-                                ${gameData.answers?.[p.id] !== undefined && currentPhase === 'QUESTION' ? 'bg-green-600 border-green-400' : 'bg-slate-700 border-slate-600'}`}>
+                                ${gameData.answers?.[p.socketId] !== undefined && currentPhase === 'QUESTION' ? 'bg-green-600 border-green-400' : 'bg-slate-700 border-slate-600'}`}>
                                 {p.nickname[0]}
                             </div>
                             <span className="text-[10px] font-bold text-slate-400 truncate max-w-[70px]">{p.nickname}</span>
                             <div className="text-[10px] font-mono font-black text-yellow-500">
-                                {gameData.mode === 'SURVIVAL' ? '❤️'.repeat(Math.max(0, p.lives)) : `${p.score}pts`}
+                                {gameData.mode === 'SURVIVAL' ? '❤️'.repeat(Math.max(0, p.lives || 0)) : `${p.score}pts`}
                             </div>
                         </div>
                     ))}

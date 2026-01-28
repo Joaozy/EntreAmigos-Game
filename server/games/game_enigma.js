@@ -1,125 +1,130 @@
-const { shuffle } = require('../utils/helpers');
-let DECKS = [{ answer: "Teste", clues: ["Dica 1", "Dica 2"] }];
+const { normalize } = require('../utils/helpers');
+const RoomManager = require('../managers/RoomManager');
+
+let RIDDLES = [
+    { question: "O que é que quanto mais seca, mais molhada fica?", answers: ["Toalha", "A toalha"] },
+    { question: "O que é, o que é? Cai em pé e corre deitado?", answers: ["Chuva", "A chuva"] },
+    { question: "O que é que anda com os pés na cabeça?", answers: ["Piolho", "O piolho"] },
+    { question: "Tenho cidades, mas não tenho casas. Tenho montanhas, mas não tenho árvores. Tenho água, mas não tenho peixe. O que sou eu?", answers: ["Mapa", "Um mapa"] }
+];
+
 try {
     const loaded = require('../data/themes_enigma.json');
-    if(Array.isArray(loaded) && loaded.length > 0) DECKS = loaded;
+    if (Array.isArray(loaded)) RIDDLES = loaded;
 } catch (e) {}
 
-const normalize = (str) => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
-const getLevenshteinDistance = (a, b) => {
-    if(a.length === 0) return b.length; 
-    if(b.length === 0) return a.length;
-    const matrix = [];
-    for(let i=0; i<=b.length; i++) matrix[i] = [i];
-    for(let j=0; j<=a.length; j++) matrix[0][j] = j;
-    for(let i=1; i<=b.length; i++) {
-        for(let j=1; j<=a.length; j++) {
-            if(b.charAt(i-1)===a.charAt(j-1)) matrix[i][j] = matrix[i-1][j-1];
-            else matrix[i][j] = Math.min(matrix[i-1][j-1]+1, Math.min(matrix[i][j-1]+1, matrix[i-1][j]+1));
-        }
-    }
-    return matrix[b.length][a.length];
+// Função de distância para aceitar respostas próximas (erros de digitação leves)
+const checkAnswer = (guess, answers) => {
+    const normGuess = normalize(guess).toLowerCase();
+    return answers.some(ans => normalize(ans).toLowerCase() === normGuess);
 };
 
-module.exports = (io, socket, rooms) => {
-    socket.on('enigma_next_clue', ({ roomId }) => {
-        const room = rooms[roomId]; // CORRIGIDO
-        if (!room || room.gameData.phase !== 'CLUES') return;
-        nextClueInternal(io, room, roomId);
-    });
+module.exports = (io, socket, RoomManager) => {
 
-    socket.on('enigma_guess', ({ roomId, guess }) => {
-        const room = rooms[roomId]; // CORRIGIDO
-        if (!room || room.state.phase !== 'CLUES') return;
-        const gd = room.state;
-        if (gd.lockedPlayers.includes(socket.id)) return;
+    // 1. TENTATIVA DE RESPOSTA
+    socket.on('enigma_guess', async ({ roomId, guess }) => {
+        try {
+            const room = await RoomManager.getRoom(roomId);
+            if (!room || room.state.phase !== 'PLAYING') return;
 
-        const player = room.players.find(p => p.socketId === socket.id);
-        const correct = normalize(gd.currentCard.answer);
-        const attempt = normalize(guess);
-        const distance = getLevenshteinDistance(attempt, correct);
-        const len = correct.length;
-        let tolerance = len > 8 ? 2 : (len >= 5 ? 1 : 0);
-
-        if (distance <= tolerance) {
-            player.score += gd.currentValue;
-            gd.roundWinner = player.nickname;
-            gd.phase = 'ROUND_END';
-            io.to(roomId).emit('receive_message', { nickname: 'SISTEMA', text: `🎉 ${player.nickname} ACERTOU!` });
-            io.to(roomId).emit('update_players', room.players);
-            updateGame(io, room, roomId);
-            if (gd.timer) clearTimeout(gd.timer);
-            gd.timer = setTimeout(() => startRound(io, room, roomId), 5000);
-        } else {
-            gd.lockedPlayers.push(socket.id);
-            socket.emit('enigma_wrong', 'Errado! Espere a próxima dica.');
-            const activePlayers = room.players.filter(p => p.socketId).length; // Simplificado
-            if (gd.lockedPlayers.length >= activePlayers) {
-                setTimeout(() => { if(gd.phase==='CLUES') nextClueInternal(io, room, roomId); }, 1500);
+            // Verifica se a resposta está certa
+            if (checkAnswer(guess, room.state.currentRiddle.answers)) {
+                const player = room.players.find(p => p.userId === socket.data.userId);
+                
+                // Pontuação e Vitória
+                if (player) player.score += 10;
+                
+                room.state.winner = player ? player.nickname : "Alguém";
+                room.state.phase = 'REVEAL';
+                
+                await RoomManager.saveRoom(room);
+                await broadcastUpdate(io, room);
             } else {
-                updateGame(io, room, roomId);
+                // Feedback visual apenas para quem errou (opcional, feito no front)
+                socket.emit('enigma_wrong', 'Resposta incorreta!');
             }
-        }
+        } catch(e) { console.error(e); }
+    });
+
+    // 2. PRÓXIMO ENIGMA
+    socket.on('enigma_next', async ({ roomId }) => {
+        try {
+            const room = await RoomManager.getRoom(roomId);
+            if (room && room.players.find(p => p.userId === socket.data.userId)?.isHost) {
+                await startNewRound(io, room);
+            }
+        } catch(e) { console.error(e); }
     });
 };
 
-module.exports.initGame = (room) => {
-    room.state = {
-        deck: shuffle([...DECKS]),
-        currentCard: null, round: 0, phase: 'CLUES', revealedCount: 0, 
-        lockedPlayers: [], roundWinner: null, currentValue: 100, timer: null
-    };
+// --- LÓGICA ---
+
+module.exports.initGame = (room, io) => {
+    // Zera scores
     room.players.forEach(p => p.score = 0);
-    startRound(null, room, room.id); // Inicia rodada
-    return { phase: 'CLUES', gameData: getPublicData(room.state) };
+
+    room.state = {
+        deck: [...RIDDLES].sort(() => 0.5 - Math.random()), // Embaralha
+        currentRiddle: null,
+        round: 0,
+        phase: 'PLAYING',
+        winner: null
+    };
+
+    if(io) startNewRound(io, room);
+    return { phase: 'PLAYING', gameData: getPublicData(room.state) };
 };
 
-function startRound(io, room, roomId) {
-    const serverIO = io || require('../server').io;
+async function startNewRound(io, room) {
     const gd = room.state;
-    if (gd.timer) clearTimeout(gd.timer);
+    
     if (gd.deck.length === 0) {
-        const winner = room.players.sort((a,b) => b.score - a.score)[0];
-        serverIO.to(roomId).emit('game_over', { winner, results: room.players });
-        return;
-    }
-    gd.round++;
-    gd.currentCard = gd.deck.pop();
-    gd.phase = 'CLUES';
-    gd.revealedCount = 1; 
-    gd.lockedPlayers = []; 
-    gd.roundWinner = null;
-    gd.currentValue = 100;
-    updateGame(serverIO, room, roomId);
-}
-
-function nextClueInternal(io, room, roomId) {
-    const gd = room.state;
-    if (gd.phase === 'ROUND_END') return;
-    if (gd.revealedCount < 10) {
-        gd.revealedCount++;
-        gd.currentValue = Math.max(10, 110 - (gd.revealedCount * 10));
-        gd.lockedPlayers = []; 
-        updateGame(io, room, roomId);
+        gd.phase = 'GAME_OVER';
     } else {
-        gd.phase = 'ROUND_END';
-        updateGame(io, room, roomId);
-        gd.timer = setTimeout(() => startRound(io, room, roomId), 5000);
+        gd.currentRiddle = gd.deck.pop();
+        gd.phase = 'PLAYING';
+        gd.winner = null;
+        gd.round++;
     }
+
+    await RoomManager.saveRoom(room);
+    await broadcastUpdate(io, room);
 }
 
+// --- FILTRO DE DADOS ---
 function getPublicData(gd) {
-    if (!gd.currentCard) return {};
+    if (!gd) return {};
+    
+    // Esconde a resposta, exceto no final
+    const riddlePublic = gd.currentRiddle ? {
+        question: gd.currentRiddle.question,
+        // answers: undefined // NÃO ENVIA AS RESPOSTAS
+    } : null;
+
+    if (gd.phase === 'REVEAL') {
+        // Se revelou, manda a resposta principal para mostrar
+        riddlePublic.answer = gd.currentRiddle.answers[0];
+    }
+
     return {
-        round: gd.round, phase: gd.phase,
-        clues: gd.currentCard.clues.slice(0, gd.revealedCount),
-        totalClues: 10, currentValue: gd.currentValue,
-        lockedPlayers: gd.lockedPlayers,
-        answer: gd.phase === 'ROUND_END' ? gd.currentCard.answer : null,
-        roundWinner: gd.roundWinner
+        round: gd.round,
+        phase: gd.phase,
+        currentRiddle: riddlePublic,
+        winner: gd.winner
     };
 }
 
-function updateGame(io, room, roomId) {
-    io.to(roomId).emit('update_game_data', { gameData: getPublicData(room.state), phase: room.state.phase });
+async function broadcastUpdate(io, room) {
+    const sockets = await io.in(room.id).fetchSockets();
+    for(const s of sockets) {
+        s.emit('joined_room', {
+            roomId: room.id,
+            players: room.players,
+            gameType: 'ENIGMA',
+            phase: room.state.phase,
+            gameData: getPublicData(room.state)
+        });
+    }
 }
+
+module.exports.getPublicData = getPublicData;

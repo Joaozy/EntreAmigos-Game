@@ -1,126 +1,222 @@
-const { shuffle, normalize } = require('../utils/helpers');
-let CATEGORIES = ["Nome", "CEP", "Cor", "Animal", "Fruta", "Marca", "Objeto", "Filme"];
+const { normalize } = require('../utils/helpers');
+const RoomManager = require('../managers/RoomManager');
+
+const activeTimers = {}; // { roomId: intervalId }
+
+let CATEGORIES = [
+    "Nome", "CEP", "Animal", "Cor", "Fruta", "Objeto", "Marca", "Filme/Série", "Profissão", "Sogra"
+];
 try {
     const loaded = require('../data/categories_stop.json');
     if (Array.isArray(loaded)) CATEGORIES = loaded;
 } catch (e) {}
 
-module.exports = (io, socket, rooms) => {
-    socket.on('stop_submit', ({ roomId, answers }) => {
-        const room = rooms[roomId]; if(!room) return;
-        room.state.answers[socket.id] = answers;
-        if (room.state.stopCaller) {
-             const submittedCount = Object.keys(room.state.answers).length;
-             if (submittedCount >= room.players.length) startReviewPhase(io, room, roomId);
-        }
+module.exports = (io, socket, RoomManager) => {
+
+    // 1. ENVIAR RESPOSTAS
+    socket.on('stop_submit', async ({ roomId, answers }) => {
+        try {
+            const room = await RoomManager.getRoom(roomId);
+            if (!room || room.state.phase !== 'PLAYING') return;
+
+            room.state.answers[socket.data.userId] = answers;
+            await RoomManager.saveRoom(room);
+        } catch(e) { console.error(e); }
     });
 
-    socket.on('stop_call', ({ roomId, answers }) => {
-        const room = rooms[roomId]; if(!room || room.state.stopCaller) return; 
-        room.state.answers[socket.id] = answers;
-        room.state.stopCaller = socket.id;
-        if (room.state.timer) clearTimeout(room.state.timer);
-        io.to(roomId).emit('stop_triggered', { callerId: socket.id, nickname: room.players.find(p=>p.socketId===socket.id)?.nickname });
-        setTimeout(() => startReviewPhase(io, room, roomId), 5000); 
+    // 2. GRITAR STOP
+    socket.on('stop_call', async ({ roomId }) => {
+        try {
+            const room = await RoomManager.getRoom(roomId);
+            if (!room || room.state.phase !== 'PLAYING') return;
+
+            room.state.stopperId = socket.data.userId;
+            await endRound(io, roomId, 'STOP_CALLED');
+        } catch(e) { console.error(e); }
     });
 
-    socket.on('stop_toggle_vote', ({ roomId, targetId, categoryIndex, voteType }) => {
-        const room = rooms[roomId]; if(!room) return;
-        const key = `${targetId}_${categoryIndex}`;
-        if (!room.state.votes[key]) room.state.votes[key] = { invalid: [], duplicate: [] };
-        const votesObj = room.state.votes[key];
-        ['invalid', 'duplicate'].forEach(t => {
-            if(votesObj[t].includes(socket.id)) votesObj[t] = votesObj[t].filter(id => id !== socket.id);
-        });
-        if (voteType !== 'none') votesObj[voteType].push(socket.id);
-        updateGame(io, room, roomId);
+    // 3. VALIDAR
+    socket.on('stop_validate', async ({ roomId, targetUserId, category }) => {
+        try {
+            const room = await RoomManager.getRoom(roomId);
+            if (!room || room.state.phase !== 'VALIDATION') return;
+
+            if (!room.state.invalidations[targetUserId]) room.state.invalidations[targetUserId] = {};
+            if (!room.state.invalidations[targetUserId][category]) room.state.invalidations[targetUserId][category] = [];
+
+            const votes = room.state.invalidations[targetUserId][category];
+            const voterId = socket.data.userId;
+
+            if (votes.includes(voterId)) {
+                room.state.invalidations[targetUserId][category] = votes.filter(id => id !== voterId);
+            } else {
+                votes.push(voterId);
+            }
+
+            await RoomManager.saveRoom(room);
+            await broadcastUpdate(io, room);
+        } catch(e) { console.error(e); }
     });
 
-    socket.on('stop_next_round', ({ roomId }) => {
-        const room = rooms[roomId]; if(!room) return;
-        calculateScores(room);
-        if (room.state.round >= 5) {
-            endGame(io, room, roomId);
-        } else {
-            initRound(room, room.state.round + 1);
-            io.to(roomId).emit('update_game_data', { gameData: room.state, phase: 'PLAYING' });
-            startTimer(io, room, roomId);
-        }
+    // 4. CONFIRMAR
+    socket.on('stop_finish_validation', async ({ roomId }) => {
+        try {
+            const room = await RoomManager.getRoom(roomId);
+            if (!room || !room.players.find(p=>p.userId === socket.data.userId)?.isHost) return;
+
+            calculateScore(room);
+            room.state.phase = 'RESULT';
+            
+            await RoomManager.saveRoom(room);
+            await broadcastUpdate(io, room);
+        } catch(e) { console.error(e); }
+    });
+
+    // 5. PRÓXIMA RODADA
+    socket.on('stop_next_round', async ({ roomId }) => {
+        try {
+            const room = await RoomManager.getRoom(roomId);
+            if(room && room.players.find(p=>p.userId === socket.data.userId)?.isHost) {
+                // Aqui usamos o setup assíncrono pois o jogo já está rodando
+                setupNewRoundState(room.state);
+                await RoomManager.saveRoom(room);
+                await broadcastUpdate(io, room);
+                startTimer(io, roomId);
+            }
+        } catch(e) { console.error(e); }
     });
 };
+
+// --- HELPERS DE ESTADO ---
+
+function setupNewRoundState(state) {
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const letter = alphabet[Math.floor(Math.random() * alphabet.length)];
+    const shuffledCats = [...CATEGORIES].sort(() => 0.5 - Math.random()).slice(0, 5);
+
+    state.round = (state.round || 0) + 1;
+    state.letter = letter;
+    state.categories = shuffledCats;
+    state.answers = {};
+    state.invalidations = {};
+    state.stopperId = null;
+    state.phase = 'PLAYING';
+}
+
+// --- INICIALIZAÇÃO ---
 
 module.exports.initGame = (room, io) => {
-    room.state = { totalScores: {}, round: 0 };
-    room.players.forEach(p => room.state.totalScores[p.socketId] = 0);
-    initRound(room, 1);
-    
-    // Timer
-    if (io) setTimeout(() => startTimer(io, room, room.id), 100);
+    // 1. Cria o objeto de estado inicial JÁ CONFIGURADO
+    const initialState = {
+        round: 0,
+        categories: [],
+        letter: '',
+        answers: {},
+        invalidations: {},
+        phase: 'PLAYING', // Força estado inicial PLAYING
+        stopperId: null
+    };
 
-    return { phase: 'PLAYING', gameData: room.state };
+    // 2. Aplica a configuração da primeira rodada SÍNCRONA
+    setupNewRoundState(initialState);
+    
+    // 3. Define o estado na sala
+    room.state = initialState;
+
+    // 4. Inicia o timer (após breve delay para garantir que o socket conectou)
+    if(io) {
+        setTimeout(() => startTimer(io, room.id), 500);
+    }
+    
+    // 5. Retorna o estado PRONTO para o server.js salvar
+    return { phase: 'PLAYING', gameData: getPublicData(initialState, null) };
 };
 
-function initRound(room, roundNum) {
-    const alphabet = "ABCDEFGHIJKLMNOPRSTUV"; 
-    const letter = alphabet[Math.floor(Math.random() * alphabet.length)];
-    const cats = shuffle([...CATEGORIES]).slice(0, 8);
-    room.state = { ...room.state, round: roundNum, letter, categories: cats, answers: {}, votes: {}, stopCaller: null, phase: 'PLAYING', endTime: Date.now() + 180000 };
+function startTimer(io, roomId) {
+    if(activeTimers[roomId]) clearInterval(activeTimers[roomId]);
+
+    let timeLeft = 180; 
+    activeTimers[roomId] = setInterval(async () => {
+        timeLeft--;
+        io.to(roomId).emit('stop_timer', timeLeft);
+        
+        if (timeLeft <= 0) {
+            clearInterval(activeTimers[roomId]);
+            await endRound(io, roomId, 'TIME_UP');
+        }
+    }, 1000);
 }
 
-function startReviewPhase(io, room, roomId) {
-    if (room.state.phase === 'REVIEW') return;
-    room.state.phase = 'REVIEW';
-    updateGame(io, room, roomId);
+async function endRound(io, roomId, reason) {
+    if(activeTimers[roomId]) { clearInterval(activeTimers[roomId]); delete activeTimers[roomId]; }
+
+    const room = await RoomManager.getRoom(roomId);
+    if(!room) return;
+
+    room.state.phase = 'VALIDATION';
+    room.state.stopReason = reason;
+    
+    await RoomManager.saveRoom(room);
+    await broadcastUpdate(io, room);
 }
 
-function calculateScores(room) {
+function calculateScore(room) {
+    const minInvalidVotes = Math.ceil(room.players.length / 2);
+
     room.players.forEach(p => {
         let roundScore = 0;
-        const playerAns = room.state.answers[p.socketId] || {};
-        room.state.categories.forEach((cat, idx) => {
-            const raw = playerAns[idx];
-            if (!raw) return;
-            const norm = normalize(raw);
-            if (!norm || norm[0].toUpperCase() !== room.state.letter) return;
+        const myAnswers = room.state.answers[p.userId] || {};
 
-            const key = `${p.socketId}_${idx}`;
-            const votes = room.state.votes[key] || { invalid: [], duplicate: [] };
-            if (votes.invalid.length > room.players.length / 2) return; 
+        room.state.categories.forEach(cat => {
+            const ans = (myAnswers[cat] || "").trim().toUpperCase();
             
-            let isDuplicate = votes.duplicate.length > room.players.length / 2;
-            if(!isDuplicate) {
-                room.players.forEach(op => {
-                    if (op.socketId !== p.socketId) {
-                        const otherNorm = normalize((room.state.answers[op.socketId] || {})[idx]);
-                        if (otherNorm === norm) isDuplicate = true;
-                    }
-                });
-            }
-            roundScore += isDuplicate ? 5 : 10;
+            const votes = (room.state.invalidations[p.userId] && room.state.invalidations[p.userId][cat]) || [];
+            if (votes.length >= minInvalidVotes) return; 
+
+            if (ans === "") return; 
+            if (!ans.startsWith(room.state.letter)) return; 
+
+            let isUnique = true;
+            room.players.forEach(other => {
+                if (other.userId === p.userId) return;
+                const otherAns = (room.state.answers[other.userId]?.[cat] || "").trim().toUpperCase();
+                if (otherAns === ans) isUnique = false;
+            });
+
+            roundScore += isUnique ? 20 : 10;
         });
-        room.state.totalScores[p.socketId] = (room.state.totalScores[p.socketId] || 0) + roundScore;
+
+        if (p.userId === room.state.stopperId) roundScore += 10; 
+        p.score = (p.score || 0) + roundScore;
     });
 }
 
-function endGame(io, room, roomId) {
-    const gd = room.state;
-    const sorted = Object.entries(gd.totalScores).sort((a,b) => b[1] - a[1]);
-    const winner = room.players.find(p => p.socketId === sorted[0][0]);
-    gd.phase = 'GAME_OVER'; gd.winner = winner;
-    io.to(roomId).emit('game_over', { winner, gameData: gd, phase: 'GAME_OVER' });
+function getPublicData(gd, userId) {
+    if (!gd) return {};
+    
+    if (gd.phase === 'PLAYING') {
+        return {
+            round: gd.round,
+            letter: gd.letter,
+            categories: gd.categories,
+            phase: gd.phase,
+            answers: { [userId]: gd.answers[userId] || {} } // Filtra respostas
+        };
+    }
+    return gd;
 }
 
-function updateGame(io, room, roomId) {
-    io.to(roomId).emit('update_game_data', { gameData: room.state, phase: room.state.phase });
+async function broadcastUpdate(io, room) {
+    const sockets = await io.in(room.id).fetchSockets();
+    for(const s of sockets) {
+        s.emit('joined_room', {
+            roomId: room.id,
+            players: room.players,
+            gameType: 'STOP',
+            phase: room.state.phase,
+            gameData: getPublicData(room.state, s.data.userId)
+        });
+    }
 }
 
-function startTimer(io, room, roomId) {
-    if (room.state.timer) clearTimeout(room.state.timer);
-    room.state.timer = setTimeout(() => {
-        if (room.state.phase === 'PLAYING') {
-            room.state.stopCaller = 'TIMEOUT'; 
-            io.to(roomId).emit('stop_triggered', { callerId: 'TIMEOUT', nickname: "TEMPO ESGOTADO" });
-            setTimeout(() => startReviewPhase(io, room, roomId), 3000);
-        }
-    }, 180000);
-}
+module.exports.getPublicData = getPublicData;

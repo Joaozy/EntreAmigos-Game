@@ -1,9 +1,14 @@
+require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const path = require('path'); // <--- IMPORTANTE PARA SERVIR O FRONTEND
+const { createAdapter } = require("@socket.io/redis-adapter");
+const { connectRedis, pubClient, subClient } = require('./config/redis');
+const RoomManager = require('./managers/RoomManager');
 
-// --- 1. IMPORTAÇÃO AUTOMATIZADA DOS JOGOS ---
+// --- CARREGA MÓDULOS DOS JOGOS ---
 const GAME_MODULES = {
     'ITO': require('./games/game_ito'),
     'CHA_CAFE': require('./games/game_chacafe'),
@@ -21,195 +26,263 @@ const GAME_MODULES = {
 const app = express();
 app.use(cors());
 
+// --- AJUSTE CRUCIAL: SERVIR FRONTEND REACT ---
+// Isso faz o Node entregar a pasta 'dist' (ou 'build') onde está o React compilado
+const buildPath = path.join(__dirname, '../client/dist');
+app.use(express.static(buildPath));
+
+// Qualquer rota que não seja API/Socket será redirecionada para o index.html do React
+// Isso permite que o React Router funcione corretamente (ex: /sala/XYZ)
+app.get('*', (req, res) => {
+    res.sendFile(path.join(buildPath, 'index.html'));
+});
+
 const server = http.createServer(app);
-const io = new Server(server, {
-    cors: {
-        origin: "*",
-        methods: ["GET", "POST"]
-    }
-});
 
-let rooms = {}; 
+(async () => {
+    try {
+        console.log("⏳ Iniciando serviços...");
+        await connectRedis();
 
-io.on('connection', (socket) => {
-    console.log(`[+] Cliente conectado: ${socket.id}`);
-
-    // --- 2. REGISTRAR LISTENERS DE TODOS OS JOGOS ---
-    Object.values(GAME_MODULES).forEach(gameModule => {
-        if (typeof gameModule === 'function') {
-            gameModule(io, socket, rooms);
-        }
-    });
-
-    // --- 3. EVENTOS GERAIS DA SALA ---
-
-    socket.on('identify', ({ userId, nickname }) => {
-        socket.data.userId = userId;
-        socket.data.nickname = nickname;
-    });
-
-    socket.on('rejoin_room', ({ roomId }) => {
-        const room = rooms[roomId];
-        if (room) {
-            socket.join(roomId);
-            socket.data.roomId = roomId;
-            const player = room.players.find(p => p.userId === socket.data.userId);
-            if (player) {
-                player.socketId = socket.id;
-                console.log(`[↻] Player ${player.nickname} reconectou na sala ${roomId}`);
-            }
-
-            // Pega dados públicos formatados se o jogo tiver helper
-            let gameDataToSend = room.state;
-            const gameModule = GAME_MODULES[room.gameType];
-            if (gameModule && typeof gameModule.getPublicData === 'function') {
-                gameDataToSend = gameModule.getPublicData(room.state);
-            }
-
-            socket.emit('joined_room', {
-                roomId,
-                players: room.players,
-                gameType: room.gameType,
-                phase: room.phase,
-                gameData: gameDataToSend
-            });
-        }
-    });
-
-    socket.on('create_room', ({ nickname, gameId, userId }) => {
-        const roomId = Math.random().toString(36).substring(2, 6).toUpperCase();
-        const selectedGame = gameId || 'TERMO'; 
-
-        rooms[roomId] = {
-            id: roomId,
-            players: [],
-            gameType: selectedGame,
-            phase: 'LOBBY',
-            state: {} 
-        };
-
-        const player = { 
-            id: socket.id, socketId: socket.id, userId: userId || socket.id,
-            nickname, isHost: true, score: 0 
-        };
-        
-        rooms[roomId].players.push(player);
-        socket.join(roomId);
-        socket.data.roomId = roomId;
-        socket.data.userId = userId;
-
-        socket.emit('joined_room', { 
-            roomId, players: rooms[roomId].players, gameType: selectedGame, phase: 'LOBBY'
+        const io = new Server(server, {
+            cors: { origin: "*", methods: ["GET", "POST"] },
+            adapter: createAdapter(pubClient, subClient)
         });
-        
-        console.log(`[★] Sala ${roomId} criada: ${selectedGame}`);
-    });
 
-    socket.on('join_room', ({ roomId, nickname, userId }) => {
-        const room = rooms[roomId?.toUpperCase()];
-        if (room) {
-            const existingIdx = room.players.findIndex(p => p.userId === userId);
-            if (existingIdx !== -1) {
-                room.players[existingIdx].socketId = socket.id;
-                room.players[existingIdx].nickname = nickname;
-            } else {
-                room.players.push({ 
-                    id: socket.id, socketId: socket.id, userId: userId || socket.id,
-                    nickname, isHost: false, score: 0 
-                });
-            }
-            
-            socket.join(room.id);
-            socket.data.roomId = room.id;
-            socket.data.userId = userId;
+        io.on('connection', (socket) => {
+            console.log(`[+] Cliente conectado: ${socket.id}`);
 
-            io.to(room.id).emit('joined_room', {
-                roomId: room.id,
-                players: room.players,
-                gameType: room.gameType,
-                phase: room.phase,
-                gameData: room.state
+            // Injeta dependências nos módulos de jogo
+            Object.values(GAME_MODULES).forEach(gameModule => {
+                if (typeof gameModule === 'function') {
+                    gameModule(io, socket, RoomManager);
+                }
             });
-            console.log(`[->] ${nickname} entrou na sala ${room.id}`);
-        } else {
-            socket.emit('error_msg', 'Sala não encontrada!');
-        }
-    });
 
-    socket.on('select_game', ({ gameId }) => {
-        const room = rooms[socket.data.roomId];
-        if (!room) return;
-        if (GAME_MODULES[gameId]) {
-            room.gameType = gameId;
-            io.to(room.id).emit('joined_room', {
-                roomId: room.id, players: room.players, gameType: gameId, phase: 'LOBBY'
+            // 1. IDENTIFICAÇÃO DO USUÁRIO
+            socket.on('identify', ({ userId, nickname }) => {
+                socket.data.userId = userId;
+                socket.data.nickname = nickname;
             });
-        }
-    });
 
-    // INICIAR JOGO (CORRIGIDO PARA PASSAR IO)
-    socket.on('start_game', () => {
-        const roomId = socket.data.roomId;
-        const room = rooms[roomId];
-        if (!room) return;
-
-        const gameModule = GAME_MODULES[room.gameType];
-        console.log(`[▶] Iniciando ${room.gameType} na sala ${roomId}`);
-
-        if (gameModule && typeof gameModule.initGame === 'function') {
-            try {
-                // AQUI ESTÁ O SEGREDO: PASSAMOS O IO
-                const initData = gameModule.initGame(room, io); 
-                room.phase = initData.phase || 'PLAYING';
+            // 2. RECONEXÃO (Com proteção contra salas expiradas)
+            socket.on('rejoin_room', async ({ roomId, userId }) => {
+                if (!roomId) return;
+                const effectiveUserId = userId || socket.data.userId;
                 
-                // Prioriza os dados retornados pelo initGame
-                let dataToSend = initData.gameData || room.state;
+                const room = await RoomManager.getRoom(roomId);
+                
+                if (room) {
+                    // Sucesso: Reconecta
+                    socket.join(roomId);
+                    socket.data.roomId = roomId;
+                    socket.data.userId = effectiveUserId;
+                    
+                    const player = room.players.find(p => p.userId === effectiveUserId);
+                    if (player) {
+                        player.socketId = socket.id;
+                        player.isOnline = true;
+                        console.log(`[↻] Player ${player.nickname} reconectou na sala ${roomId}`);
+                        await RoomManager.saveRoom(room);
+                    }
 
-                io.to(roomId).emit('joined_room', {
-                    roomId: room.id,
-                    players: room.players,
-                    gameType: room.gameType,
-                    phase: room.phase,
-                    gameData: dataToSend
-                });
-            } catch (err) {
-                console.error(`Erro init ${room.gameType}:`, err);
-                socket.emit('error_msg', 'Erro ao iniciar jogo.');
-            }
-        } else {
-            room.phase = 'PLAYING';
-            room.state = { status: 'started' };
-            io.to(roomId).emit('joined_room', {
-                roomId: room.id,
-                players: room.players,
-                gameType: room.gameType,
-                phase: room.phase,
-                gameData: room.state
+                    // Prepara dados personalizados (segurança)
+                    let gameDataToSend = room.state;
+                    const gameModule = GAME_MODULES[room.gameType];
+                    if (gameModule && typeof gameModule.getPublicData === 'function') {
+                        gameDataToSend = gameModule.getPublicData(room.state, effectiveUserId);
+                    }
+
+                    socket.emit('joined_room', {
+                        roomId,
+                        players: room.players,
+                        gameType: room.gameType,
+                        phase: room.phase,
+                        gameData: gameDataToSend || {}
+                    });
+                } else {
+                    // Falha: Sala não existe mais -> Avisa o cliente para limpar cache
+                    console.log(`[🚫] Rejoin falhou: Sala ${roomId} não encontrada.`);
+                    socket.emit('rejoin_failed');
+                }
             });
-        }
-    });
 
-    socket.on('send_message', (data) => {
-        io.to(data.roomId).emit('receive_message', data);
-    });
+            // 3. CRIAR SALA
+            socket.on('create_room', async ({ nickname, gameId, userId }) => {
+                const roomId = Math.random().toString(36).substring(2, 6).toUpperCase();
+                const selectedGame = gameId || 'TERMO';
 
-    socket.on('leave_room', () => {
-        const roomId = socket.data.roomId;
-        if(roomId && rooms[roomId]) {
-            socket.leave(roomId);
-            rooms[roomId].players = rooms[roomId].players.filter(p => p.socketId !== socket.id);
-            io.to(roomId).emit('update_players', rooms[roomId].players);
-            socket.data.roomId = null;
-        }
-    });
+                const newRoom = {
+                    id: roomId, players: [], gameType: selectedGame, 
+                    phase: 'LOBBY', state: {}, createdAt: Date.now()
+                };
 
-    socket.on('disconnect', () => {
-        // Lógica de desconexão silenciosa para permitir reconnect
-    });
-});
+                const player = { 
+                    id: socket.id, socketId: socket.id, userId: userId || socket.id,
+                    nickname, isHost: true, score: 0, isOnline: true
+                };
+                
+                newRoom.players.push(player);
+                await RoomManager.saveRoom(newRoom);
 
-const PORT = process.env.PORT || 3001;
-// CORREÇÃO CRÍTICA: Escutar em 0.0.0.0 para aceitar conexões locais e de rede
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`🔥 Servidor rodando na porta ${PORT}`);
-});
+                socket.join(roomId);
+                socket.data.roomId = roomId;
+                socket.data.userId = userId;
+
+                socket.emit('joined_room', { 
+                    roomId, players: newRoom.players, gameType: selectedGame, phase: 'LOBBY'
+                });
+                console.log(`[★] Sala ${roomId} criada: ${selectedGame}`);
+            });
+
+            // 4. ENTRAR NA SALA
+            socket.on('join_room', async ({ roomId, nickname, userId }) => {
+                if (!roomId) return socket.emit('error_msg', 'ID inválido.');
+                const room = await RoomManager.getRoom(roomId);
+
+                if (room) {
+                    const existingIdx = room.players.findIndex(p => p.userId === userId);
+                    if (existingIdx !== -1) {
+                        room.players[existingIdx].socketId = socket.id;
+                        room.players[existingIdx].nickname = nickname;
+                        room.players[existingIdx].isOnline = true;
+                    } else {
+                        room.players.push({ 
+                            id: socket.id, socketId: socket.id, userId: userId || socket.id,
+                            nickname, isHost: false, score: 0, isOnline: true
+                        });
+                    }
+
+                    await RoomManager.saveRoom(room);
+                    
+                    socket.join(room.id);
+                    socket.data.roomId = room.id;
+                    socket.data.userId = userId;
+
+                    // Envia dados personalizados
+                    let myData = room.state;
+                    const gameModule = GAME_MODULES[room.gameType];
+                    if (gameModule && typeof gameModule.getPublicData === 'function') {
+                        myData = gameModule.getPublicData(room.state, userId);
+                    }
+
+                    socket.emit('joined_room', {
+                        roomId: room.id,
+                        players: room.players,
+                        gameType: room.gameType,
+                        phase: room.phase,
+                        gameData: myData || {}
+                    });
+
+                    // Avisa os outros (apenas atualização de lista de players)
+                    socket.to(room.id).emit('update_players', room.players);
+                    console.log(`[->] ${nickname} entrou na sala ${room.id}`);
+                } else {
+                    socket.emit('error_msg', 'Sala não encontrada!');
+                }
+            });
+
+            // 5. SELECIONAR JOGO (Lobby)
+            socket.on('select_game', async ({ gameId }) => {
+                const roomId = socket.data.roomId;
+                if (!roomId) return;
+                const room = await RoomManager.getRoom(roomId);
+                if (room && GAME_MODULES[gameId]) {
+                    room.gameType = gameId;
+                    room.state = {}; 
+                    room.phase = 'LOBBY';
+                    await RoomManager.saveRoom(room);
+
+                    io.to(room.id).emit('joined_room', {
+                        roomId: room.id, players: room.players, gameType: gameId, phase: 'LOBBY'
+                    });
+                }
+            });
+
+            // 6. INICIAR JOGO (Com Broadcast Personalizado)
+            socket.on('start_game', async () => {
+                const roomId = socket.data.roomId;
+                if (!roomId) return;
+                const room = await RoomManager.getRoom(roomId);
+                if (!room) return;
+        
+                const gameModule = GAME_MODULES[room.gameType];
+                console.log(`[▶] Iniciando ${room.gameType} na sala ${roomId}`);
+        
+                if (gameModule && typeof gameModule.initGame === 'function') {
+                    try {
+                        const initData = gameModule.initGame(room, io); 
+                        room.phase = initData.phase || 'PLAYING';
+                        
+                        // Se o initGame retornou gameData, atualiza o state
+                        if(initData.gameData) room.state = initData.gameData;
+
+                        await RoomManager.saveRoom(room);
+        
+                        // BROADCAST INTELIGENTE: Envia dados filtrados para cada jogador
+                        const sockets = await io.in(roomId).fetchSockets();
+                        for (const s of sockets) {
+                            let personalizedData = room.state;
+                            if (gameModule.getPublicData) {
+                                personalizedData = gameModule.getPublicData(room.state, s.data.userId);
+                            }
+                            s.emit('joined_room', {
+                                roomId: room.id, players: room.players, gameType: room.gameType,
+                                phase: room.phase, gameData: personalizedData || {}
+                            });
+                        }
+                    } catch (err) {
+                        console.error(`Erro init ${room.gameType}:`, err);
+                        socket.emit('error_msg', 'Erro ao iniciar jogo.');
+                    }
+                } else {
+                    // Fallback para jogos sem módulo
+                    room.phase = 'PLAYING';
+                    room.state = { status: 'started' };
+                    await RoomManager.saveRoom(room);
+                    io.to(roomId).emit('joined_room', {
+                        roomId: room.id, players: room.players, gameType: room.gameType,
+                        phase: room.phase, gameData: room.state
+                    });
+                }
+            });
+
+            // 7. CHAT E SAÍDA
+            socket.on('send_message', (data) => io.to(data.roomId).emit('receive_message', data));
+            
+            socket.on('leave_room', async () => {
+                const roomId = socket.data.roomId;
+                if (roomId) {
+                    const room = await RoomManager.getRoom(roomId);
+                    if (room) {
+                        socket.leave(roomId);
+                        room.players = room.players.filter(p => p.socketId !== socket.id);
+                        if (room.players.length === 0) {
+                            await RoomManager.deleteRoom(roomId);
+                            console.log(`[X] Sala ${roomId} vazia e removida.`);
+                        } else {
+                            const hasHost = room.players.some(p => p.isHost);
+                            if (!hasHost && room.players.length > 0) room.players[0].isHost = true;
+                            await RoomManager.saveRoom(room);
+                            io.to(roomId).emit('update_players', room.players);
+                        }
+                    }
+                    socket.data.roomId = null;
+                }
+            });
+
+            socket.on('disconnect', async () => { 
+                // A reconexão é tratada no 'rejoin_room', aqui apenas logs opcionais
+            });
+        });
+
+        const PORT = process.env.PORT || 3001;
+        server.listen(PORT, '0.0.0.0', () => {
+            console.log(`🔥 Servidor rodando na porta ${PORT} (Redis Mode + React Static)`);
+        });
+
+    } catch (error) {
+        console.error("❌ Falha fatal:", error);
+        process.exit(1);
+    }
+})();

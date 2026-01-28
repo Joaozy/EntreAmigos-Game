@@ -1,19 +1,21 @@
 import React, { useState } from 'react';
-import { socket } from './socket';
-import { Crown, Eye, Skull, Flag, User, Shield, RotateCcw } from 'lucide-react';
+import { useGame } from './context/GameContext'; 
+import { Crown, Eye, Skull, Flag, User, Shield, RotateCcw, LogOut } from 'lucide-react';
 
-export default function GameCodenames({ players, isHost, roomId, gameData, phase }) {
+export default function GameCodenames() {
+  const { socket, roomId, isHost, gameData, players, myUserId, sairDoJogo } = useGame();
+  
   const [hintWord, setHintWord] = useState('');
   const [hintCount, setHintCount] = useState(1);
 
+  // Estados Seguros
   const teams = gameData?.teams || { red: { members: [] }, blue: { members: [] } };
   const grid = gameData?.grid || [];
   const currentTurn = gameData?.turn; 
-  const currentPhase = gameData?.phase; 
+  const currentPhase = gameData?.phase || 'SETUP';
 
-  const myId = socket.id;
-  const myTeam = teams.red.members.includes(myId) ? 'red' : teams.blue.members.includes(myId) ? 'blue' : null;
-  const isSpymaster = teams.red.spymaster === myId || teams.blue.spymaster === myId;
+  const myTeam = teams.red?.members.includes(myUserId) ? 'red' : teams.blue?.members.includes(myUserId) ? 'blue' : null;
+  const isSpymaster = teams.red?.spymaster === myUserId || teams.blue?.spymaster === myUserId;
   const isTeamTurn = currentTurn === myTeam;
 
   const joinTeam = (team) => socket.emit('cn_join_team', { roomId, team });
@@ -29,6 +31,7 @@ export default function GameCodenames({ players, isHost, roomId, gameData, phase
   };
 
   const clickCard = (cardId) => {
+    // Só clica se for fase de chute, meu turno, NÃO sou espião e carta fechada
     if (currentPhase === 'GUESSING' && isTeamTurn && !isSpymaster && !grid[cardId].revealed) {
         socket.emit('cn_click_card', { roomId, cardId });
     }
@@ -36,14 +39,14 @@ export default function GameCodenames({ players, isHost, roomId, gameData, phase
 
   const passTurn = () => socket.emit('cn_pass_turn', { roomId });
 
-  // Sidebar para Desktop
+  // Sidebar Component
   const TeamSidebar = ({ color, teamData }) => {
       const isRed = color === 'red';
       const bgColor = isRed ? 'bg-red-950/80 border-red-900' : 'bg-blue-950/80 border-blue-900';
       const textColor = isRed ? 'text-red-100' : 'text-blue-100';
       
-      const spymaster = players.find(p => p.id === teamData.spymaster);
-      const members = teamData.members.filter(id => id !== teamData.spymaster).map(id => players.find(p => p.id === id));
+      const spymaster = players.find(p => p.userId === teamData.spymaster);
+      const members = teamData.members.filter(id => id !== teamData.spymaster).map(id => players.find(p => p.userId === id));
 
       return (
           <div className={`flex-1 min-w-[200px] p-4 rounded-xl border-2 flex flex-col gap-4 ${bgColor} transition-all duration-500`}>
@@ -52,7 +55,7 @@ export default function GameCodenames({ players, isHost, roomId, gameData, phase
                       {isRed ? 'Vermelho' : 'Azul'}
                   </h2>
                   <div className="text-4xl font-black text-white">{gameData?.score?.[color] || 0}</div>
-                  <span className="text-[10px] uppercase text-slate-400">Agentes</span>
+                  <span className="text-[10px] uppercase text-slate-400">Agentes Restantes</span>
               </div>
 
               <div className="bg-black/30 p-3 rounded-lg">
@@ -75,7 +78,7 @@ export default function GameCodenames({ players, isHost, roomId, gameData, phase
                   </p>
                   <div className="space-y-1">
                       {members.length > 0 ? members.map(p => p && (
-                          <div key={p.id} className={`flex items-center gap-2 p-1.5 rounded bg-black/20 text-xs ${textColor}`}>
+                          <div key={p.userId} className={`flex items-center gap-2 p-1.5 rounded bg-black/20 text-xs ${textColor}`}>
                               <User size={12} />
                               <span className="font-medium truncate">{p.nickname}</span>
                           </div>
@@ -86,64 +89,65 @@ export default function GameCodenames({ players, isHost, roomId, gameData, phase
       );
   };
 
-  // SETUP
+  // --- TELA 1: SETUP ---
   if (currentPhase === 'SETUP') {
     return (
       <div className="min-h-screen bg-slate-900 text-white p-4 flex flex-col items-center pt-10">
+        <div className="absolute top-4 right-4">
+            <button onClick={sairDoJogo}><LogOut className="text-red-400"/></button>
+        </div>
         <h1 className="text-3xl md:text-4xl font-black mb-8 tracking-widest uppercase text-slate-300">Recrutamento</h1>
         
         <div className="flex flex-col md:flex-row gap-4 md:gap-8 w-full max-w-6xl">
+            {/* TIME VERMELHO */}
             <div className="flex-1 bg-red-950/40 border-2 border-red-800 rounded-2xl p-4 md:p-6 relative">
                 <div className="flex justify-between items-center mb-4">
                     <h2 className="text-2xl font-black text-red-500">VERMELHO</h2>
-                    {!myTeam && <button onClick={() => joinTeam('red')} className="bg-red-600 text-white font-bold text-xs px-4 py-2 rounded-full hover:bg-red-500 shadow-lg">ENTRAR</button>}
+                    {myTeam !== 'red' && <button onClick={() => joinTeam('red')} className="bg-red-600 text-white font-bold text-xs px-4 py-2 rounded-full hover:bg-red-500 shadow-lg">ENTRAR</button>}
                 </div>
-                
                 <div className="mb-4 p-3 bg-black/40 rounded-xl border border-red-900/50 flex justify-between items-center">
                     <div className="flex items-center gap-2">
                         <Crown size={16} className={teams.red.spymaster ? "text-red-400" : "text-slate-700"} />
                         <div>
                             <p className="text-[10px] text-slate-500 font-bold uppercase">Espião Mestre</p>
-                            <p className="font-bold text-red-100 text-sm">{players.find(p=>p.id === teams.red.spymaster)?.nickname || '---'}</p>
+                            <p className="font-bold text-red-100 text-sm">{players.find(p=>p.userId === teams.red.spymaster)?.nickname || '---'}</p>
                         </div>
                     </div>
                     {myTeam === 'red' && !teams.red.spymaster && (
                          <button onClick={() => becomeSpymaster('red')} className="text-[10px] border border-red-500 text-red-400 px-2 py-1 rounded hover:bg-red-900/30">ASSUMIR</button>
                     )}
                 </div>
-
                 <div className="space-y-1">
                     {teams.red.members.filter(id => id !== teams.red.spymaster).map(id => (
                         <div key={id} className="flex items-center gap-2 text-red-200 bg-red-900/20 p-2 rounded text-xs">
-                             <User size={12} /> {players.find(p=>p.id === id)?.nickname}
+                             <User size={12} /> {players.find(p=>p.userId === id)?.nickname}
                         </div>
                     ))}
                 </div>
             </div>
 
+            {/* TIME AZUL */}
             <div className="flex-1 bg-blue-950/40 border-2 border-blue-800 rounded-2xl p-4 md:p-6 relative">
                 <div className="flex justify-between items-center mb-4">
                     <h2 className="text-2xl font-black text-blue-500">AZUL</h2>
-                    {!myTeam && <button onClick={() => joinTeam('blue')} className="bg-blue-600 text-white font-bold text-xs px-4 py-2 rounded-full hover:bg-blue-500 shadow-lg">ENTRAR</button>}
+                    {myTeam !== 'blue' && <button onClick={() => joinTeam('blue')} className="bg-blue-600 text-white font-bold text-xs px-4 py-2 rounded-full hover:bg-blue-500 shadow-lg">ENTRAR</button>}
                 </div>
-                
                 <div className="mb-4 p-3 bg-black/40 rounded-xl border border-blue-900/50 flex justify-between items-center">
                     <div className="flex items-center gap-2">
                         <Crown size={16} className={teams.blue.spymaster ? "text-blue-400" : "text-slate-700"} />
                         <div>
                             <p className="text-[10px] text-slate-500 font-bold uppercase">Espião Mestre</p>
-                            <p className="font-bold text-blue-100 text-sm">{players.find(p=>p.id === teams.blue.spymaster)?.nickname || '---'}</p>
+                            <p className="font-bold text-blue-100 text-sm">{players.find(p=>p.userId === teams.blue.spymaster)?.nickname || '---'}</p>
                         </div>
                     </div>
                     {myTeam === 'blue' && !teams.blue.spymaster && (
                          <button onClick={() => becomeSpymaster('blue')} className="text-[10px] border border-blue-500 text-blue-400 px-2 py-1 rounded hover:bg-blue-900/30">ASSUMIR</button>
                     )}
                 </div>
-
                 <div className="space-y-1">
                     {teams.blue.members.filter(id => id !== teams.blue.spymaster).map(id => (
                         <div key={id} className="flex items-center gap-2 text-blue-200 bg-blue-900/20 p-2 rounded text-xs">
-                             <User size={12} /> {players.find(p=>p.id === id)?.nickname}
+                             <User size={12} /> {players.find(p=>p.userId === id)?.nickname}
                         </div>
                     ))}
                 </div>
@@ -165,15 +169,19 @@ export default function GameCodenames({ players, isHost, roomId, gameData, phase
     );
   }
 
-  // --- TELA DE JOGO ---
+  // --- TELA 2: JOGO ---
+  
   const getCardStyle = (card) => {
-      const showColor = card.revealed || isSpymaster || currentPhase === 'GAME_OVER';
-      if (!showColor) return "bg-[#eaddcf] text-slate-800 shadow-[0_3px_0_#c4a488] hover:-translate-y-0.5 cursor-pointer";
+      // Se tiver cor (foi revelado OU sou espião), mostra. Se não, mostra bege.
+      if (!card.type) return "bg-[#eaddcf] text-slate-800 shadow-[0_3px_0_#c4a488] hover:-translate-y-0.5 cursor-pointer";
       
-      if (card.type === 'red') return card.revealed ? "bg-red-600 text-red-950 border-2 md:border-4 border-red-900 opacity-60 grayscale-[0.3]" : "bg-red-100 text-red-900 border-2 border-red-400";
-      if (card.type === 'blue') return card.revealed ? "bg-blue-600 text-blue-950 border-2 md:border-4 border-blue-900 opacity-60 grayscale-[0.3]" : "bg-blue-100 text-blue-900 border-2 border-blue-400";
-      if (card.type === 'neutral') return card.revealed ? "bg-[#d6c0ad] text-slate-500 opacity-40 scale-95" : "bg-[#fdf3e8] text-slate-500 border border-[#eaddcf]";
-      if (card.type === 'assassin') return card.revealed ? "bg-slate-950 text-white border-2 border-red-500" : "bg-slate-800 text-white border border-slate-600";
+      const type = card.type; // red, blue, neutral, assassin
+      const isRev = card.revealed;
+
+      if (type === 'red') return isRev ? "bg-red-600 text-red-950 border-2 md:border-4 border-red-900 opacity-60 grayscale-[0.3]" : "bg-red-100 text-red-900 border-2 border-red-400";
+      if (type === 'blue') return isRev ? "bg-blue-600 text-blue-950 border-2 md:border-4 border-blue-900 opacity-60 grayscale-[0.3]" : "bg-blue-100 text-blue-900 border-2 border-blue-400";
+      if (type === 'neutral') return isRev ? "bg-[#d6c0ad] text-slate-500 opacity-40 scale-95" : "bg-[#fdf3e8] text-slate-500 border border-[#eaddcf]";
+      if (type === 'assassin') return isRev ? "bg-slate-950 text-white border-2 border-red-500" : "bg-slate-800 text-white border border-slate-600";
   };
 
   const getStatusMessage = () => {
@@ -188,7 +196,7 @@ export default function GameCodenames({ players, isHost, roomId, gameData, phase
   return (
     <div className="h-[100dvh] bg-slate-900 flex flex-col md:flex-row overflow-hidden">
         
-        {/* SIDEBARS DESKTOP */}
+        {/* SIDEBARS */}
         <div className="hidden md:flex w-64 h-full bg-slate-950 border-r border-white/5">
             <TeamSidebar color="red" teamData={teams.red} />
         </div>
@@ -213,7 +221,6 @@ export default function GameCodenames({ players, isHost, roomId, gameData, phase
                     </div>
                 )}
 
-                {/* GAME OVER MSG */}
                 {currentPhase === 'GAME_OVER' && (
                     <div className="mt-2 bg-yellow-500 text-black px-6 py-1 rounded-lg font-black text-sm md:text-xl shadow-lg">
                         VITÓRIA {gameData.winner === 'red' ? 'VERMELHA' : 'AZUL'} 🏆
@@ -221,7 +228,7 @@ export default function GameCodenames({ players, isHost, roomId, gameData, phase
                 )}
             </div>
 
-            {/* TABULEIRO SCROLLÁVEL */}
+            {/* TABULEIRO */}
             <div className="flex-1 overflow-y-auto p-2 md:p-8 flex flex-col items-center pb-24 scrollbar-hide">
                 
                 {/* FORM DO ESPIÃO */}
@@ -233,7 +240,7 @@ export default function GameCodenames({ players, isHost, roomId, gameData, phase
                     </form>
                 )}
 
-                {/* GRID DE CARTAS */}
+                {/* GRID */}
                 <div className="grid grid-cols-5 gap-1.5 md:gap-3 w-full max-w-4xl mx-auto">
                     {grid.map((card) => (
                         <div 
@@ -252,13 +259,18 @@ export default function GameCodenames({ players, isHost, roomId, gameData, phase
                 </div>
             </div>
 
-            {/* BOTÕES FLUTUANTES (Passar vez / Reiniciar) */}
+            {/* BOTÕES FLUTUANTES */}
             <div className="absolute bottom-16 md:bottom-8 right-4 md:right-8 z-50 flex flex-col gap-2">
                 {currentPhase === 'GUESSING' && isTeamTurn && !isSpymaster && (
                     <button onClick={passTurn} className="bg-slate-800/90 backdrop-blur text-white font-bold px-4 py-3 rounded-full shadow-xl border border-slate-600 flex items-center gap-2 hover:bg-slate-700 active:scale-95">
                         <span className="hidden md:inline">PASSAR</span> <Flag size={20} className="text-yellow-400" />
                     </button>
                 )}
+                {/* BOTÃO DE SAIR SEMPRE VISÍVEL NO JOGO */}
+                <button onClick={sairDoJogo} className="bg-red-900/80 text-white p-3 rounded-full shadow-xl border border-red-700 hover:bg-red-800" title="Sair">
+                    <LogOut size={24}/>
+                </button>
+                
                 {currentPhase === 'GAME_OVER' && isHost && (
                     <button onClick={() => socket.emit('restart_game', { roomId })} className="bg-yellow-400 text-black font-black p-3 md:px-6 rounded-full shadow-xl hover:scale-110 active:scale-95 border-2 border-white">
                         <RotateCcw size={24} />
@@ -266,7 +278,7 @@ export default function GameCodenames({ players, isHost, roomId, gameData, phase
                 )}
             </div>
 
-            {/* MOBILE BOTTOM BAR (PLACAR) */}
+            {/* MOBILE BOTTOM BAR */}
             <div className="md:hidden shrink-0 bg-slate-950 border-t border-white/10 flex h-14">
                 <div className={`flex-1 flex flex-col items-center justify-center ${currentTurn === 'red' ? 'bg-red-900/20' : ''}`}>
                     <span className="text-xs text-red-500 font-black">RED</span>

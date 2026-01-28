@@ -1,87 +1,166 @@
 const { generateDeck } = require('../utils/helpers');
-const THEMES = [
+const RoomManager = require('../managers/RoomManager');
+
+// Carrega os temas do arquivo JSON
+let THEMES = [
+    // Fallback caso o arquivo falhe
     { title: "Popularidade", min: "Baixa", max: "Alta" },
-    { title: "Tamanho", min: "Pequeno", max: "Grande" },
-    { title: "Utilidade", min: "Inútil", max: "Útil" },
-    { title: "Perigo", min: "Seguro", max: "Mortal" }
+    { title: "Tamanho", min: "Pequeno", max: "Grande" }
 ];
 
-module.exports = (io, socket, rooms) => {
-    socket.on('submit_clue', ({ roomId, clue }) => {
-        const room = rooms[roomId]; // CORRIGIDO
-        if (!room) return;
-        const player = room.players.find(p => p.socketId === socket.id);
-        if (player) {
-            player.clue = clue;
-            player.hasSubmitted = true;
-            if (room.players.every(p => p.hasSubmitted)) {
-                room.state.phase = 'ORDERING';
-                io.to(roomId).emit('joined_room', { roomId, players: room.players, phase: 'ORDERING', gameType: 'ITO' });
-            } else {
-                io.to(roomId).emit('update_players', room.players);
-            }
-        }
-    });
+try {
+    // Importa da pasta data
+    const loaded = require('../data/themes.json');
+    if (Array.isArray(loaded) && loaded.length > 0) {
+        THEMES = loaded;
+        console.log(`[ITO] ${THEMES.length} temas carregados com sucesso.`);
+    }
+} catch (e) {
+    console.error("[ITO] Erro ao carregar themes.json, usando padrão.", e.message);
+}
 
-    socket.on('update_order', ({ roomId, newOrderIds }) => {
-        const room = rooms[roomId]; // CORRIGIDO
-        if (!room) return;
-        const reordered = [];
-        newOrderIds.forEach(uid => {
-            const p = room.players.find(pl => pl.userId === uid);
-            if (p) reordered.push(p);
-        });
-        room.players = reordered;
-        socket.to(roomId).emit('update_players', room.players);
-    });
+module.exports = (io, socket, RoomManager) => {
+    
+    // 1. ENVIAR PISTA
+    socket.on('submit_clue', async ({ roomId, clue }) => {
+        try {
+            const room = await RoomManager.getRoom(roomId);
+            if (!room || !room.state) return;
 
-    socket.on('reveal_cards', ({ roomId }) => {
-        const room = rooms[roomId]; // CORRIGIDO
-        if (!room) return;
-        room.state.phase = 'REVEAL';
-        const perfectOrder = [...room.players].sort((a, b) => a.secretNumber - b.secretNumber);
-        let totalScore = 0;
-        const results = room.players.map((player, index) => {
-            const isCorrect = player.userId === perfectOrder[index].userId;
-            if (isCorrect) totalScore++;
-            return { ...player, isCorrect };
-        });
-        io.to(roomId).emit('game_over', { results, totalScore, maxScore: room.players.length, phase: 'REVEAL' });
-    });
+            // Inicializa playerData se não existir
+            if (!room.state.playerData) room.state.playerData = {};
+            // Garante que o jogador tem dados
+            if (!room.state.playerData[socket.data.userId]) return;
 
-    socket.on('ito_restart', ({ roomId }) => {
-        const room = rooms[roomId]; // CORRIGIDO
-        if(room) {
-            const nextState = module.exports.initGame(room);
-            room.phase = nextState.phase;
-            io.to(roomId).emit('joined_room', { 
-                roomId, players: room.players, phase: nextState.phase, gameType: 'ITO', gameData: nextState.gameData 
+            room.state.playerData[socket.data.userId].clue = clue;
+            
+            // Verifica se todos enviaram (apenas quem tem carta)
+            const allSubmitted = room.players.every(p => {
+                const pData = room.state.playerData[p.userId];
+                return pData && pData.clue;
             });
-            // Reenvia segredos
-            room.players.forEach(p => io.to(p.socketId).emit('your_secret_number', p.secretNumber));
-        }
+
+            if (allSubmitted) {
+                room.state.phase = 'ORDERING';
+            }
+
+            await RoomManager.saveRoom(room);
+            await broadcastUpdate(io, room);
+
+        } catch(e) { console.error(e); }
+    });
+
+    // 2. REORDENAR CARTAS
+    socket.on('update_order', async ({ roomId, newOrderIds }) => {
+        try {
+            const room = await RoomManager.getRoom(roomId);
+            if (!room) return;
+            
+            room.state.currentOrder = newOrderIds;
+            
+            await RoomManager.saveRoom(room);
+            // Broadcast direto para atualização rápida visual
+            socket.to(roomId).emit('update_game_data', { gameData: { currentOrder: newOrderIds } });
+        } catch(e) { console.error(e); }
+    });
+
+    // 3. REVELAR CARTAS
+    socket.on('reveal_cards', async ({ roomId }) => {
+        try {
+            const room = await RoomManager.getRoom(roomId);
+            if (!room) return;
+            
+            room.state.phase = 'REVEAL';
+            await RoomManager.saveRoom(room);
+            await broadcastUpdate(io, room);
+        } catch(e) { console.error(e); }
+    });
+
+    // 4. REINICIAR
+    socket.on('ito_restart', async ({ roomId }) => {
+        try {
+            const room = await RoomManager.getRoom(roomId);
+            if(room) {
+                // Reinicia lógica mantendo a sala
+                const newState = module.exports.initGame(room); 
+                room.state = newState.gameData; // Atualiza o estado da sala
+                room.phase = newState.phase;
+                
+                await RoomManager.saveRoom(room);
+                await broadcastUpdate(io, room);
+            }
+        } catch(e) { console.error(e); }
     });
 };
+
+// --- LÓGICA DO JOGO ---
 
 module.exports.initGame = (room) => {
-    const deck = generateDeck();
-    room.state = { theme: THEMES[Math.floor(Math.random() * THEMES.length)], phase: 'CLUE_PHASE' };
+    const deck = generateDeck(); // Usa a função importada
+    const playerData = {};
     
     room.players.forEach(p => {
-        p.secretNumber = deck.pop();
-        p.clue = '';
-        p.hasSubmitted = false;
-        delete p.isCorrect;
+        playerData[p.userId] = {
+            secretNumber: deck.pop(),
+            clue: ''
+        };
     });
-    
-    // Pequeno hack: Enviar segredos aqui é difícil sem o IO. 
-    // O ideal é o cliente pedir, mas vamos deixar o start_game do server.js lidar ou o restart lidar.
-    // Para o primeiro start, o server.js não envia segredos específicos.
-    // Vamos adicionar um delay para enviar via require IO
-    setTimeout(() => {
-        const io = require('../server').io;
-        room.players.forEach(p => io.to(p.socketId).emit('your_secret_number', p.secretNumber));
-    }, 200);
 
-    return { phase: 'CLUE_PHASE', gameData: room.state };
+    // Escolhe um tema aleatório da lista carregada
+    const randomTheme = THEMES[Math.floor(Math.random() * THEMES.length)];
+
+    // Estado inicial salvo no Redis
+    room.state = { 
+        theme: randomTheme, 
+        phase: 'CLUE_PHASE',
+        playerData: playerData,
+        currentOrder: room.players.map(p => p.userId)
+    };
+
+    // Retorna para o server.js usar
+    return { phase: 'CLUE_PHASE', gameData: room.state }; 
 };
+
+// --- FILTRO DE DADOS (SEGURANÇA) ---
+function getPublicData(gd, userId) {
+    if (!gd) return {};
+    
+    const isReveal = gd.phase === 'REVEAL';
+
+    const publicPlayersData = {};
+    if (gd.playerData) {
+        Object.keys(gd.playerData).forEach(pid => {
+            const data = gd.playerData[pid];
+            const isMe = pid === userId;
+            
+            publicPlayersData[pid] = {
+                clue: data.clue,
+                hasSubmitted: !!data.clue,
+                // O Segredo (Carta) só aparece se for REVEAL ou se for EU mesmo
+                secretNumber: (isReveal || isMe) ? data.secretNumber : null
+            };
+        });
+    }
+
+    return {
+        theme: gd.theme,
+        phase: gd.phase,
+        currentOrder: gd.currentOrder,
+        playersData: publicPlayersData
+    };
+}
+
+async function broadcastUpdate(io, room) {
+    const sockets = await io.in(room.id).fetchSockets();
+    for(const s of sockets) {
+        s.emit('joined_room', {
+            roomId: room.id,
+            players: room.players,
+            gameType: 'ITO',
+            phase: room.state.phase,
+            gameData: getPublicData(room.state, s.data.userId)
+        });
+    }
+}
+
+module.exports.getPublicData = getPublicData;

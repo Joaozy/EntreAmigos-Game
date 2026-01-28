@@ -45,70 +45,49 @@ export const GameProvider = ({ children }) => {
 
     const fetchProfile = async (userId, userEmail) => {
         try {
-            // 1. Tenta buscar o perfil existente
             let { data, error } = await supabase
                 .from('profiles')
                 .select('*')
                 .eq('id', userId)
-                .maybeSingle(); // Use maybeSingle para não dar erro 406 se não achar
+                .maybeSingle(); 
             
-            // 2. CORREÇÃO: Se não existir perfil, cria um automaticamente (Auto-Healing)
             if (!data) {
-                console.log("Perfil não encontrado. Criando automaticamente...");
                 const randomNick = "Jogador" + Math.floor(Math.random() * 1000);
-                const { data: newData, error: insertError } = await supabase
+                const { data: newData } = await supabase
                     .from('profiles')
                     .insert([{ id: userId, nickname: randomNick }])
                     .select()
                     .single();
-                
-                if (insertError) {
-                    console.error("Erro ao criar perfil automático:", insertError);
-                    return;
-                }
                 data = newData;
             }
             
             if (data) {
                 const completeUser = { ...data, email: userEmail };
                 setUser(completeUser);
-                setView('LOBBY'); // <--- ISSO TIRA VOCÊ DA TELA DE LOGIN
-                
                 if(socket.connected) socket.emit('identify', { userId: completeUser.id, nickname: completeUser.nickname });
             }
         } catch (error) { 
-            console.error("Erro crítico no perfil:", error); 
+            console.error("Erro perfil:", error); 
         }
     };
 
-    // --- 2. SOCKET LISTENERS ---
+    // --- 2. GERENCIADOR DE SOCKET ---
     useEffect(() => {
         const onConnect = () => {
             setIsConnected(true);
-            if (user) {
-                socket.emit('identify', { userId: user.id, nickname: user.nickname });
-                
-                // Tenta reconectar se caiu
-                const savedRoom = localStorage.getItem('saved_roomId');
-                if (savedRoom) socket.emit('rejoin_room', { roomId: savedRoom, userId: user.id });
-            }
+            if (user) socket.emit('identify', { userId: user.id, nickname: user.nickname });
         };
-
         const onDisconnect = () => setIsConnected(false);
-
         const onJoinedRoom = (data) => {
             console.log("Joined Room:", data);
             setRoomId(data.roomId);
             setPlayers(data.players || []);
-            
             if (data.gameType) setSelectedGame(data.gameType);
             if (data.gameData) setGameData(data.gameData);
-            
             if(user && data.players) {
                 const me = data.players.find(p => p.userId === user.id);
                 setIsHost(me?.isHost || false);
             }
-
             localStorage.setItem('saved_roomId', data.roomId);
             setCurrentPhase(data.phase);
             setView('GAME'); 
@@ -124,29 +103,33 @@ export const GameProvider = ({ children }) => {
             const me = list.find(p => p.userId === user?.id);
             if(me) setIsHost(me.isHost);
         });
-
         socket.on('update_game_data', ({gameData, phase}) => {
             setGameData(prev => ({...prev, ...gameData}));
             if(phase) setCurrentPhase(phase);
         });
-
         socket.on('game_over', (data) => {
              if (data.results) setGameResult(data);
              if (data.phase) setCurrentPhase(data.phase);
-             if (data.gameData) setGameData(prev => ({...prev, ...data.gameData}));
+        });
+        
+        // CORREÇÃO: Listener para falha de reconexão
+        socket.on('rejoin_failed', () => {
+            console.warn("Sala salva não existe mais. Voltando ao Lobby.");
+            localStorage.removeItem('saved_roomId'); // Limpa o cache podre
+            setRoomId('');
+            setGameData({});
+            setView('LOBBY'); // Destrava o usuário
+            setIsJoining(false);
         });
 
         socket.on('your_secret_number', setMySecret);
-        
-        socket.on('error_msg', (msg) => { 
-            alert(msg); 
-            setIsJoining(false); 
-        });
+        socket.on('error_msg', (msg) => { alert(msg); setIsJoining(false); });
 
         return () => { 
             socket.off('connect', onConnect);
             socket.off('disconnect', onDisconnect);
             socket.off('joined_room', onJoinedRoom);
+            socket.off('rejoin_failed'); // Cleanup
             socket.off('update_players');
             socket.off('update_game_data');
             socket.off('game_over');
@@ -154,6 +137,20 @@ export const GameProvider = ({ children }) => {
             socket.off('error_msg');
         };
     }, [user]);
+
+    // --- 3. AUTO-RECONNECT ---
+    useEffect(() => {
+        if (user && isConnected && view !== 'GAME') {
+            const savedRoom = localStorage.getItem('saved_roomId');
+            
+            if (savedRoom) {
+                console.log(`[Auto-Rejoin] Tentando voltar para sala ${savedRoom}...`);
+                socket.emit('rejoin_room', { roomId: savedRoom, userId: user.id });
+            } else {
+                setView('LOBBY');
+            }
+        }
+    }, [user, isConnected, view]);
 
     // --- AÇÕES ---
     const criarSala = () => {
@@ -178,6 +175,7 @@ export const GameProvider = ({ children }) => {
     };
 
     const logout = async () => {
+        localStorage.clear();
         await supabase.auth.signOut();
         setView('HOME');
         setUser(null);

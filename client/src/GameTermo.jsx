@@ -9,62 +9,78 @@ const KEYBOARD_ROWS = [
 ];
 
 export default function GameTermo() {
-  const { socket, roomId, isHost, sairDoJogo, currentPhase, gameResult } = useGame();
+  const { socket, roomId, isHost, sairDoJogo, currentPhase, gameData, players } = useGame();
   
-  // Estado Local
   const [currentGuess, setCurrentGuess] = useState('');
+  const [shakeRow, setShakeRow] = useState(false);
+  
+  // Estados do Jogo
   const [history, setHistory] = useState([]); 
   const [gameStatus, setGameStatus] = useState('PLAYING');
   const [secretWord, setSecretWord] = useState('');
-  const [shakeRow, setShakeRow] = useState(false);
-  const [scoreboard, setScoreboard] = useState([]);
-  const [currentRound, setCurrentRound] = useState(1);
   const [myScore, setMyScore] = useState(0);
+  const [currentRound, setCurrentRound] = useState(1);
+  const [maxRounds, setMaxRounds] = useState(5);
 
-  // 1. Listeners
+  // 1. RECEBIMENTO DE DADOS
   useEffect(() => {
-    socket.emit('game_termo_load_state');
-
-    const handleUpdate = (data) => {
-        setHistory(data.history);
-        setGameStatus(data.status);
-        if(data.round) setCurrentRound(data.round);
-        if(data.secretWord) setSecretWord(data.secretWord);
-        if(data.totalScores && socket.id) setMyScore(data.totalScores[socket.id] || 0);
-
-        // Se resetou (nova rodada), limpa inputs
-        if (data.status === 'PLAYING' && data.history.length === 0) {
-            setCurrentGuess('');
-            setSecretWord('');
+    if (gameData) {
+        // Histórico
+        if (gameData.attempts) {
+            const visualHistory = gameData.attempts.map(attempt => {
+                return attempt.word.split('').map((letter, i) => ({
+                    letter: letter,
+                    status: mapColorToStatus(attempt.result[i])
+                }));
+            });
+            setHistory(visualHistory);
+        } else {
             setHistory([]);
         }
-    };
 
-    const handleError = () => {
-        setShakeRow(true);
-        setTimeout(() => setShakeRow(false), 500);
-    };
+        // Status (Ganhou/Perdeu a Rodada)
+        if (gameData.finished) {
+            setGameStatus(gameData.won ? 'WON' : 'LOST');
+        } else {
+            setGameStatus('PLAYING');
+        }
 
-    const handleScoreboard = (data) => setScoreboard(data);
+        // Palavra Secreta (revelada ao fim da rodada)
+        if (gameData.solution) setSecretWord(gameData.solution);
 
-    socket.on('game_termo_my_update', handleUpdate);
-    socket.on('game_termo_error', handleError);
-    socket.on('game_termo_scoreboard', handleScoreboard);
+        // Rounds
+        if (gameData.round) setCurrentRound(gameData.round);
+        if (gameData.maxRounds) setMaxRounds(gameData.maxRounds);
 
-    return () => {
-        socket.off('game_termo_my_update', handleUpdate);
-        socket.off('game_termo_error', handleError);
-        socket.off('game_termo_scoreboard', handleScoreboard);
-    };
-  }, [socket]);
+        // RESET AUTOMÁTICO (Quando o host avança a rodada)
+        // Detectamos isso quando o status volta para PLAYING e não temos tentativas
+        if (!gameData.finished && (!gameData.attempts || gameData.attempts.length === 0)) {
+            setCurrentGuess('');
+            setSecretWord('');
+            setGameStatus('PLAYING');
+        }
+    }
 
-  // 2. Input Logic
+    if (players && socket.id) {
+        const me = players.find(p => p.socketId === socket.id);
+        if (me) setMyScore(me.score || 0);
+    }
+
+  }, [gameData, players, socket.id]);
+
+  const mapColorToStatus = (serverColor) => {
+      if (serverColor === 'green') return 'correct';
+      if (serverColor === 'yellow') return 'present';
+      return 'absent'; 
+  };
+
+  // 2. INPUT
   const handleInput = (key) => {
     if (gameStatus !== 'PLAYING' || currentPhase === 'GAME_OVER') return;
 
     if (key === 'ENTER') {
         if (currentGuess.length === 5) {
-            socket.emit('game_termo_guess', { guess: currentGuess });
+            socket.emit('termo_guess', { roomId, guess: currentGuess });
             setCurrentGuess('');
         } else {
             setShakeRow(true);
@@ -107,17 +123,18 @@ export default function GameTermo() {
       return status;
   };
 
-  // --- TELA DE GAME OVER (FIM DE JOGO TOTAL) ---
-  if (currentPhase === 'GAME_OVER' && gameResult) {
+  // --- TELA DE GAME OVER FINAL (FIM DOS 5 ROUNDS) ---
+  if (currentPhase === 'GAME_OVER') {
       return (
         <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center animate-in zoom-in">
             <Trophy size={80} className="text-yellow-400 mb-6 animate-bounce" />
             <h1 className="text-4xl font-black mb-2">FIM DE JOGO!</h1>
+            <p className="text-slate-400 mb-8">Todas as {maxRounds} rodadas foram concluídas.</p>
             
             <div className="bg-slate-800 p-8 rounded-3xl shadow-2xl mb-8 w-full max-w-md border border-slate-700">
-                <p className="text-slate-400 text-xs uppercase font-bold tracking-widest mb-4">Placar Final</p>
+                <p className="text-slate-400 text-xs uppercase font-bold tracking-widest mb-4">Ranking Final</p>
                 <div className="space-y-3">
-                    {gameResult.results?.sort((a,b) => b.score - a.score).map((p, i) => (
+                    {players?.sort((a,b) => b.score - a.score).map((p, i) => (
                         <div key={i} className={`flex justify-between items-center p-3 rounded-xl ${i===0 ? 'bg-yellow-900/20 border border-yellow-500/50' : 'bg-slate-700/50'}`}>
                             <div className="flex items-center gap-3">
                                 <span className={`font-bold w-6 ${i===0 ? 'text-2xl' : 'text-slate-400'}`}>{i===0 ? '🥇' : `#${i+1}`}</span>
@@ -130,25 +147,24 @@ export default function GameTermo() {
             </div>
 
             <div className="flex flex-col gap-3 w-full max-w-xs">
-                {isHost && (
+                {isHost ? (
                     <>
-                        <button onClick={() => socket.emit('game_termo_restart', { roomId })} className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-4 rounded-xl shadow-lg transition flex items-center justify-center gap-2">
+                        <button onClick={() => socket.emit('termo_restart', { roomId })} className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-4 rounded-xl shadow-lg transition flex items-center justify-center gap-2">
                             <RotateCcw size={20}/> JOGAR NOVAMENTE
                         </button>
-                        <button onClick={() => socket.emit('game_termo_back_to_lobby', { roomId })} className="bg-slate-700 hover:bg-slate-600 text-white font-bold py-4 rounded-xl shadow-lg transition flex items-center justify-center gap-2">
+                        <button onClick={sairDoJogo} className="bg-slate-700 hover:bg-slate-600 text-white font-bold py-4 rounded-xl shadow-lg transition flex items-center justify-center gap-2">
                             <Home size={20}/> VOLTAR AO LOBBY
                         </button>
                     </>
+                ) : (
+                    <button onClick={sairDoJogo} className="text-red-400 font-bold py-2 hover:text-red-300 transition">Sair da Sala</button>
                 )}
-                <button onClick={sairDoJogo} className="text-red-400 font-bold py-2 hover:text-red-300 transition">
-                    Sair da Sala
-                </button>
             </div>
         </div>
       );
   }
 
-  // --- TELA DE JOGO (RODADAS) ---
+  // --- RENDER GRID ---
   const renderGrid = () => {
     const rows = [];
     for (let i = 0; i < 6; i++) {
@@ -180,59 +196,48 @@ export default function GameTermo() {
   return (
     <div className="min-h-screen bg-slate-900 flex flex-col lg:flex-row text-white p-2">
       
-      {/* BARRA SUPERIOR FIXA (CONTROLE DE SAÍDA) */}
+      {/* HEADER FIXO */}
       <div className="fixed top-0 left-0 w-full p-4 flex justify-between items-center z-50 pointer-events-none">
           <div className="bg-slate-900/80 backdrop-blur-md px-4 py-2 rounded-full border border-slate-700 shadow-lg pointer-events-auto flex gap-4 text-xs font-bold text-slate-300 uppercase tracking-widest">
-              <span>Rodada <span className="text-white">{currentRound}/5</span></span>
-              <span>Pontos: <span className="text-yellow-400">{myScore}</span></span>
+              <span>Rodada <span className="text-white">{currentRound}/{maxRounds}</span></span>
+              <span>Seus Pontos: <span className="text-yellow-400">{myScore}</span></span>
           </div>
-          <button 
-            onClick={sairDoJogo}
-            className="pointer-events-auto bg-red-900/80 hover:bg-red-800 text-white p-2 rounded-full shadow-lg backdrop-blur-md transition"
-            title="Sair do Jogo"
-          >
-              <LogOut size={20}/>
-          </button>
+          <button onClick={sairDoJogo} className="pointer-events-auto bg-red-900/80 hover:bg-red-800 text-white p-2 rounded-full shadow-lg backdrop-blur-md transition"><LogOut size={20}/></button>
       </div>
 
-      {/* AREA DE JOGO */}
+      {/* ÁREA CENTRAL */}
       <div className="flex-1 flex flex-col items-center justify-center py-12 relative">
-        
         <div className="text-center mb-6">
             <h1 className="text-4xl font-black text-emerald-500 tracking-[0.2em] mb-2">TERMO</h1>
             
-            {/* Mensagem de Resultado da Rodada */}
+            {/* MENSAGEM DE FIM DA RODADA */}
             {gameStatus !== 'PLAYING' && (
                 <div className={`px-6 py-3 rounded-xl shadow-lg animate-bounce font-bold text-lg mb-4 ${gameStatus === 'WON' ? 'bg-green-600' : 'bg-red-600'}`}>
                     {gameStatus === 'WON' ? '🏆 ACERTOU!' : `☠️ ERA: ${secretWord}`}
                 </div>
             )}
 
-            {/* BOTÕES ENTRE RODADAS (HOST) */}
-            {gameStatus !== 'PLAYING' && (
+            {/* CONTROLES ENTRE RODADAS */}
+            {gameStatus !== 'PLAYING' && isHost && (
                 <div className="flex flex-wrap gap-3 justify-center animate-in fade-in zoom-in z-50 relative">
-                    {isHost ? (
-                        <>
-                            <button 
-                                onClick={() => socket.emit('game_termo_next_round', { roomId })}
-                                className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-white px-8 py-3 rounded-xl font-bold transition shadow-lg border-b-4 border-emerald-700 active:border-b-0 active:translate-y-1"
-                            >
-                                {currentRound < 5 ? "PRÓXIMA RODADA" : "VER RESULTADO FINAL"} <ArrowRight size={20}/>
-                            </button>
-                            <button onClick={() => socket.emit('game_termo_back_to_lobby', { roomId })} className="bg-slate-700 hover:bg-slate-600 text-white font-bold p-3 rounded-xl" title="Voltar ao Lobby"><Home size={20}/></button>
-                        </>
-                    ) : (
-                        <div className="text-sm text-slate-400 font-bold bg-slate-800 px-4 py-2 rounded-lg animate-pulse border border-slate-700">
-                            Aguardando o Host...
-                        </div>
-                    )}
+                    <button 
+                        onClick={() => socket.emit('termo_next_round', { roomId })} 
+                        className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-white px-8 py-3 rounded-xl font-bold transition shadow-lg border-b-4 border-emerald-700 active:border-b-0 active:translate-y-1"
+                    >
+                        {currentRound < maxRounds ? "PRÓXIMA RODADA" : "VER PLACAR FINAL"} <ArrowRight size={20}/>
+                    </button>
+                </div>
+            )}
+            {gameStatus !== 'PLAYING' && !isHost && (
+                 <div className="text-sm text-slate-400 font-bold bg-slate-800 px-4 py-2 rounded-lg animate-pulse border border-slate-700">
+                    Aguardando o Host...
                 </div>
             )}
         </div>
 
         <div className="mb-8">{renderGrid()}</div>
 
-        {/* Teclado */}
+        {/* TECLADO */}
         <div className={`w-full max-w-lg px-1 select-none transition-opacity duration-500 ${gameStatus !== 'PLAYING' ? 'opacity-30 pointer-events-none' : ''}`}>
             {KEYBOARD_ROWS.map((row, i) => (
                 <div key={i} className="flex justify-center gap-1.5 mb-1.5">
@@ -257,19 +262,16 @@ export default function GameTermo() {
 
       {/* PLACAR LATERAL */}
       <div className="bg-slate-800 w-full lg:w-72 p-6 rounded-t-3xl lg:rounded-l-3xl lg:rounded-tr-none border-t lg:border-l border-slate-700 overflow-y-auto max-h-[30vh] lg:max-h-screen mt-4 lg:mt-0 shadow-2xl">
-        <h3 className="text-slate-400 font-bold text-xs uppercase mb-4 text-center tracking-widest">Placar da Rodada</h3>
+        <h3 className="text-slate-400 font-bold text-xs uppercase mb-4 text-center tracking-widest">Ranking Global</h3>
         <div className="space-y-3">
-            {scoreboard.sort((a,b) => b.score - a.score).map((p, i) => (
+            {players?.sort((a,b) => b.score - a.score).map((p, i) => (
                 <div key={i} className="flex items-center justify-between bg-slate-900/60 p-3 rounded-xl border border-slate-700/50">
                     <div className="flex gap-3 items-center">
-                        <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs ${p.status === 'WON' ? 'bg-green-600' : 'bg-slate-600'}`}>{p.nickname[0]}</div>
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs bg-slate-600`}>{p.nickname[0]}</div>
                         <div className="flex flex-col">
                             <span className="text-sm font-bold truncate max-w-[90px]">{p.nickname}</span>
                             <span className="text-[10px] text-yellow-400 font-mono">{p.score} pts</span>
                         </div>
-                    </div>
-                    <div className="flex gap-0.5 items-center">
-                        {[1,2,3,4,5,6].map(n => <div key={n} className={`w-1.5 h-3 rounded-full ${n <= p.attempts ? (p.status === 'WON' ? 'bg-green-500' : (p.status==='LOST'?'bg-red-500':'bg-yellow-500')) : 'bg-slate-700'}`}></div>)}
                     </div>
                 </div>
             ))}
