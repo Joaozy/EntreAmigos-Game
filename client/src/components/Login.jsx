@@ -1,114 +1,108 @@
 import React, { useState } from 'react';
-import { supabase } from '../supabase';
 import { useGame } from '../context/GameContext';
 
 export default function Login() {
-  const { isConnected } = useGame();
-  const [isRegister, setIsRegister] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [formData, setFormData] = useState({ name: '', email: '', password: '' });
-  const [error, setError] = useState('');
+    const { loginSupabase, cadastroSupabase, isLoading, error } = useGame();
+    
+    const [isLogin, setIsLogin] = useState(true);
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [nick, setNick] = useState('');
 
-  const handleChange = (e) => setFormData({ ...formData, [e.target.name]: e.target.value });
-
-  const handleAuth = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    setError('');
-    console.log("Iniciando autenticação...");
-
-    try {
-        if (isRegister) {
-            // 1. Criar Conta Auth
-            const { data: authData, error: authError } = await supabase.auth.signUp({
-                email: formData.email,
-                password: formData.password,
-            });
-
-            if (authError) throw authError;
-
-            // 2. Criar Perfil Público
-            if (authData.user) {
-                const { error: profileError } = await supabase
-                    .from('profiles')
-                    .insert([{ id: authData.user.id, nickname: formData.name }]);
-                
-                if (profileError) console.error("Erro perfil:", profileError);
-                
-                alert("Cadastro realizado! O login será automático.");
-            }
-
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (isLogin) {
+            await loginSupabase(email, password);
         } else {
-            // Login
-            const { error } = await supabase.auth.signInWithPassword({
-                email: formData.email,
-                password: formData.password,
-            });
-            if (error) throw error;
+            if (!nick) return alert("Por favor, escolha um apelido!");
+            await cadastroSupabase(email, password, nick);
         }
-        console.log("Autenticação Supabase OK. Aguardando GameContext...");
-    } catch (err) {
-        console.error("Erro Auth:", err);
-        setError(err.message || "Erro na autenticação.");
-    } finally {
-        setLoading(false);
-    }
-  };
+    };
 
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-indigo-950 p-4">
-      <div className="bg-white w-full max-w-md rounded-3xl p-8 shadow-2xl relative">
-        <h1 className="text-4xl font-black text-indigo-600 mb-2 text-center">EntreAmigos</h1>
-        <p className="text-slate-500 font-medium text-center mb-6">Acesse sua conta para jogar</p>
-
-        {/* Toggle Login/Register */}
-        <div className="flex bg-slate-100 rounded-xl p-1 mb-6">
-            <button onClick={() => setIsRegister(false)} className={`flex-1 py-2 rounded-lg font-bold text-sm transition ${!isRegister ? 'bg-white text-indigo-600 shadow' : 'text-slate-400'}`}>LOGIN</button>
-            <button onClick={() => setIsRegister(true)} className={`flex-1 py-2 rounded-lg font-bold text-sm transition ${isRegister ? 'bg-white text-indigo-600 shadow' : 'text-slate-400'}`}>CADASTRO</button>
-        </div>
-
-        <form onSubmit={handleAuth} className="space-y-4">
-            {isRegister && (
-                <div>
-                    <label className="text-xs font-bold text-slate-500 ml-1">APELIDO</label>
-                    <input 
-                        name="name" 
-                        className="w-full bg-slate-50 text-slate-900 border-2 border-slate-200 rounded-xl p-3 font-bold outline-none focus:border-indigo-500 placeholder-slate-400" 
-                        placeholder="Ex: Mestre dos Jogos" 
-                        onChange={handleChange} 
-                    />
+    return (
+        <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 font-sans bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-800 via-slate-900 to-black">
+            <div className="bg-slate-800 p-8 md:p-10 rounded-3xl w-full max-w-md shadow-2xl border border-slate-700/50 backdrop-blur-sm">
+                
+                {/* Cabeçalho */}
+                <div className="text-center mb-8">
+                    <h1 className="text-4xl font-black text-white tracking-tighter mb-2 drop-shadow-lg">
+                        Entre<span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-500">Amigos</span>
+                    </h1>
+                    <p className="text-slate-400 text-sm font-medium">
+                        {isLogin ? 'Bem-vindo de volta! 👋' : 'Crie sua conta e comece a jogar 🚀'}
+                    </p>
                 </div>
-            )}
-            <div>
-                <label className="text-xs font-bold text-slate-500 ml-1">E-MAIL</label>
-                <input 
-                    name="email" 
-                    type="email" 
-                    className="w-full bg-slate-50 text-slate-900 border-2 border-slate-200 rounded-xl p-3 font-bold outline-none focus:border-indigo-500 placeholder-slate-400" 
-                    placeholder="seu@email.com" 
-                    onChange={handleChange} 
-                />
-            </div>
-            <div>
-                <label className="text-xs font-bold text-slate-500 ml-1">SENHA</label>
-                <input 
-                    name="password" 
-                    type="password" 
-                    className="w-full bg-slate-50 text-slate-900 border-2 border-slate-200 rounded-xl p-3 font-bold outline-none focus:border-indigo-500 placeholder-slate-400" 
-                    placeholder="******" 
-                    onChange={handleChange} 
-                />
-            </div>
 
-            {error && <div className="bg-red-100 text-red-600 text-sm font-bold p-3 rounded-lg text-center">{error}</div>}
+                {/* Erro */}
+                {error && (
+                    <div className="bg-red-500/10 border border-red-500/20 text-red-200 p-4 rounded-xl mb-6 text-sm text-center font-medium animate-in fade-in slide-in-from-top-2">
+                        ⚠️ {error}
+                    </div>
+                )}
 
-            <button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl shadow-lg transition disabled:opacity-50 mt-4">
-                {loading ? "PROCESSANDO..." : (isRegister ? "CRIAR CONTA" : "ENTRAR")}
-            </button>
-        </form>
-        
-        {!isConnected && <p className="text-center text-yellow-600 text-xs mt-4 animate-pulse">Conectando ao servidor de jogos...</p>}
-      </div>
-    </div>
-  );
+                {/* Formulário */}
+                <form onSubmit={handleSubmit} className="space-y-5">
+                    {!isLogin && (
+                        <div className="space-y-1">
+                            <label className="text-slate-400 text-xs font-bold ml-1 uppercase tracking-wider">Apelido</label>
+                            <input 
+                                type="text"
+                                className="w-full bg-slate-900/50 border border-slate-600 rounded-xl p-3.5 text-white outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all placeholder:text-slate-600"
+                                placeholder="Como quer ser chamado?"
+                                value={nick}
+                                onChange={e => setNick(e.target.value)}
+                            />
+                        </div>
+                    )}
+
+                    <div className="space-y-1">
+                        <label className="text-slate-400 text-xs font-bold ml-1 uppercase tracking-wider">Email</label>
+                        <input 
+                            type="email"
+                            className="w-full bg-slate-900/50 border border-slate-600 rounded-xl p-3.5 text-white outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all placeholder:text-slate-600"
+                            placeholder="seu@email.com"
+                            value={email}
+                            onChange={e => setEmail(e.target.value)}
+                        />
+                    </div>
+
+                    <div className="space-y-1">
+                        <label className="text-slate-400 text-xs font-bold ml-1 uppercase tracking-wider">Senha</label>
+                        <input 
+                            type="password"
+                            className="w-full bg-slate-900/50 border border-slate-600 rounded-xl p-3.5 text-white outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all placeholder:text-slate-600"
+                            placeholder="••••••••"
+                            value={password}
+                            onChange={e => setPassword(e.target.value)}
+                        />
+                    </div>
+
+                    <button 
+                        type="submit"
+                        disabled={isLoading}
+                        className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold py-4 rounded-xl transition-all shadow-lg shadow-blue-900/30 active:scale-[0.98] disabled:opacity-70 disabled:cursor-not-allowed flex justify-center items-center mt-2"
+                    >
+                        {isLoading ? (
+                            <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                        ) : (
+                            isLogin ? 'ENTRAR' : 'CADASTRAR'
+                        )}
+                    </button>
+                </form>
+
+                {/* Rodapé Alternar */}
+                <div className="mt-8 text-center pt-6 border-t border-slate-700/50">
+                    <p className="text-slate-500 text-sm mb-2">
+                        {isLogin ? 'Ainda não tem uma conta?' : 'Já possui cadastro?'}
+                    </p>
+                    <button 
+                        onClick={() => setIsLogin(!isLogin)}
+                        className="text-blue-400 hover:text-blue-300 text-sm font-bold hover:underline transition"
+                    >
+                        {isLogin ? 'Criar nova conta' : 'Fazer login'}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
 }

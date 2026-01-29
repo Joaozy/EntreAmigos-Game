@@ -1,21 +1,19 @@
 import { io } from 'socket.io-client';
 
-const isProd = import.meta.env.PROD;
-const protocol = window.location.protocol;
-const hostname = window.location.hostname; 
-const port = 3001;
+const isProd = import.meta.env.PROD; // Vite define isso automaticamente
 
-// Se for produção, usa o domínio fixo.
-// Se for dev (localhost ou IP de rede), monta a URL dinâmica.
-const URL = isProd 
-    ? 'https://entreamigos.app.br' 
-    : `${protocol}//${hostname}:${port}`;
+// URL Dinâmica:
+// - Em Produção: undefined (conecta na mesma origem, ex: https://site.com)
+// - Em Dev: http://localhost:3001
+const URL = isProd ? undefined : 'http://localhost:3001';
 
-console.log(`🔌 Conectando ao Socket em: ${URL}`);
+console.log(`🔌 Conectando ao Socket.io em: ${URL || 'Mesma Origem'}`);
 
 export const socket = io(URL, {
     path: '/socket.io/',
-    transports: ['websocket', 'polling'], // Tenta WebSocket primeiro
+    transports: ['websocket', 'polling'], // Tenta WebSocket primeiro para performance
     autoConnect: true,
     reconnection: true,
+    reconnectionAttempts: 10,
+    reconnectionDelay: 1000
 });

@@ -3,20 +3,23 @@ const RoomManager = require('../managers/RoomManager');
 
 module.exports = (io, socket, RoomManager) => {
 
-    // 1. NARRADOR ENVIA CARTA E FRASE
+    // 1. NARRADOR ENVIA CARTA
     socket.on('dixit_narrate', async ({ roomId, cardId, phrase }) => {
         try {
             const room = await RoomManager.getRoom(roomId);
             if(!room || room.state.phase !== 'STORY') return;
             if(socket.data.userId !== room.state.storytellerId) return;
 
-            // Remove carta da mão
-            const p = room.players.find(pl => pl.userId === socket.data.userId);
-            if(p && p.hand) p.hand = p.hand.filter(c => c !== cardId);
+            const userId = socket.data.userId;
+            
+            // Remove da mão (agora salva no state.hands)
+            if (room.state.hands && room.state.hands[userId]) {
+                room.state.hands[userId] = room.state.hands[userId].filter(c => c !== cardId);
+            }
             
             room.state.storyCard = cardId;
             room.state.phrase = phrase;
-            room.state.tableCards.push({ cardId, ownerId: socket.data.userId });
+            room.state.tableCards.push({ cardId, ownerId: userId });
             room.state.phase = 'SELECTION';
 
             await RoomManager.saveRoom(room);
@@ -24,20 +27,25 @@ module.exports = (io, socket, RoomManager) => {
         } catch(e) { console.error(e); }
     });
 
-    // 2. OUTROS JOGADORES ESCOLHEM CARTA
+    // 2. OUTROS JOGADORES ESCOLHEM
     socket.on('dixit_select_card', async ({ roomId, cardId }) => {
         try {
             const room = await RoomManager.getRoom(roomId);
             if(!room || room.state.phase !== 'SELECTION') return;
             
-            if(room.state.tableCards.some(tc => tc.ownerId === socket.data.userId)) return;
+            const userId = socket.data.userId;
+            if(room.state.tableCards.some(tc => tc.ownerId === userId)) return;
 
-            const p = room.players.find(pl => pl.userId === socket.data.userId);
-            if(!p || !p.hand.includes(cardId)) return;
+            // Remove da mão
+            if (room.state.hands && room.state.hands[userId]) {
+                const hand = room.state.hands[userId];
+                if (!hand.includes(cardId)) return;
+                
+                room.state.hands[userId] = hand.filter(c => c !== cardId);
+                room.state.tableCards.push({ cardId, ownerId: userId });
+            }
 
-            p.hand = p.hand.filter(c => c !== cardId);
-            room.state.tableCards.push({ cardId, ownerId: socket.data.userId });
-
+            // Verifica se todos jogaram
             if (room.state.tableCards.length === room.players.length) {
                 room.state.phase = 'VOTING';
                 room.state.tableCards = shuffle(room.state.tableCards);
@@ -53,7 +61,6 @@ module.exports = (io, socket, RoomManager) => {
         try {
             const room = await RoomManager.getRoom(roomId);
             if(!room || room.state.phase !== 'VOTING') return;
-            
             if(socket.data.userId === room.state.storytellerId) return;
             
             const myCard = room.state.tableCards.find(c => c.ownerId === socket.data.userId);
@@ -83,19 +90,21 @@ module.exports = (io, socket, RoomManager) => {
     });
 };
 
-// --- LOGICA ---
+// --- LÓGICA ---
 
 module.exports.initGame = (room, io) => {
-    // Deck de 1 a 216 (assumindo que as imagens existem)
     const deck = shuffle(Array.from({length: 216}, (_, i) => i + 1));
-    
+    const hands = {};
+
+    // Distribui mãos e inicializa no STATE
     room.players.forEach(p => {
-        p.hand = deck.splice(0, 6);
+        hands[p.userId] = deck.splice(0, 6);
         p.score = 0;
     });
 
     room.state = {
         deck,
+        hands, // <--- Agora as cartas ficam aqui!
         storytellerId: room.players[0].userId,
         storyCard: null,
         phrase: '',
@@ -105,13 +114,18 @@ module.exports.initGame = (room, io) => {
         roundLog: []
     };
 
-    return { phase: 'STORY', gameData: getPublicData(room.state, null) };
+    console.log(`[DIXIT] Iniciado. Mãos distribuídas.`);
+    return { phase: 'STORY'};
 };
 
 async function startNextRound(io, room) {
+    // Reabastece mãos
     room.players.forEach(p => {
-        while(p.hand.length < 6 && room.state.deck.length > 0) {
-            p.hand.push(room.state.deck.pop());
+        const userId = p.userId;
+        if (!room.state.hands[userId]) room.state.hands[userId] = [];
+        
+        while(room.state.hands[userId].length < 6 && room.state.deck.length > 0) {
+            room.state.hands[userId].push(room.state.deck.pop());
         }
     });
 
@@ -142,7 +156,7 @@ function calculateScores(room) {
         room.players.forEach(p => {
             if (p.userId !== gd.storytellerId) p.score += 2;
         });
-        gd.roundLog.push("Todos ou Ninguém acertou! Narrador: 0, Outros: +2");
+        gd.roundLog.push("Todos ou Ninguém acertou! (+2 para outros)");
     } else {
         const narrator = room.players.find(p => p.userId === gd.storytellerId);
         if(narrator) narrator.score += 3;
@@ -153,7 +167,7 @@ function calculateScores(room) {
                 if(p) p.score += 3;
             }
         });
-        gd.roundLog.push(`Narrador pontua! (${correctVotes} acertos)`);
+        gd.roundLog.push(`Narrador pontuou! (${correctVotes} acertos)`);
     }
 
     Object.entries(gd.votes).forEach(([voterId, cardId]) => {
@@ -167,11 +181,9 @@ function calculateScores(room) {
     });
 }
 
-// --- CORREÇÃO AQUI: PROTEÇÃO CONTRA ESTADO VAZIO ---
+// --- CORREÇÃO PRINCIPAL NO GET PUBLIC DATA ---
 function getPublicData(gd, userId) {
     if (!gd) return {};
-    
-    // Se o jogo não começou (Lobby), não tem tableCards ainda. Retorna vazio.
     if (!gd.tableCards) return { phase: 'LOBBY' };
 
     const isVoting = gd.phase === 'VOTING';
@@ -183,35 +195,42 @@ function getPublicData(gd, userId) {
         return { cardId: 'BACK', ownerId: c.ownerId }; 
     });
 
+    // PEGA A MÃO DIRETO DO STATE
+    const myHand = (userId && gd.hands) ? gd.hands[userId] : [];
+
     return {
         ...gd,
         deck: undefined, 
+        hands: undefined, // Não envia a mão de todos
         tableCards: publicTableCards,
-        myHand: null
+        myHand: myHand // Envia APENAS a minha mão
     };
 }
 
 async function broadcastUpdate(io, room) {
     const sockets = await io.in(room.id).fetchSockets();
     for(const s of sockets) {
-        const myPlayer = room.players.find(p => p.userId === s.data.userId);
-        const myHand = myPlayer ? myPlayer.hand : [];
         
+        // CORREÇÃO: Descobre quem é o dono do socket olhando a lista da sala
+        // (Isso corrige o problema de "s.data.userId" vir vazio)
+        const player = room.players.find(p => p.socketId === s.id);
+        const targetUserId = player ? player.userId : s.data.userId;
+
         const safePlayers = room.players.map(p => ({
             ...p,
             hand: undefined 
         }));
 
-        const publicData = getPublicData(room.state, s.data.userId);
+        // Usa o targetUserId descoberto acima
+        const publicData = getPublicData(room.state, targetUserId);
         
         s.emit('joined_room', {
             roomId: room.id,
             players: safePlayers, 
             gameType: 'DIXIT',
             phase: room.state.phase,
-            gameData: { ...publicData, myHand } 
+            gameData: publicData
         });
     }
 }
-
 module.exports.getPublicData = getPublicData;

@@ -1,40 +1,86 @@
-const { generateDeck } = require('../utils/helpers');
 const RoomManager = require('../managers/RoomManager');
 
-// Carrega os temas do arquivo JSON
+const createDeck = () => {
+    const deck = [];
+    for(let i = 1; i <= 100; i++) deck.push(i);
+    return deck.sort(() => 0.5 - Math.random());
+};
+
 let THEMES = [
-    // Fallback caso o arquivo falhe
     { title: "Popularidade", min: "Baixa", max: "Alta" },
-    { title: "Tamanho", min: "Pequeno", max: "Grande" }
+    { title: "Tamanho", min: "Pequeno", max: "Grande" },
+    { title: "Utilidade", min: "Inútil", max: "Útil" },
+    { title: "Perigo", min: "Seguro", max: "Mortal" },
+    { title: "Inteligência", min: "Burro", max: "Gênio" },
+    { title: "Sabor", min: "Ruim", max: "Delicioso" }
 ];
 
 try {
-    // Importa da pasta data
     const loaded = require('../data/themes.json');
-    if (Array.isArray(loaded) && loaded.length > 0) {
-        THEMES = loaded;
-        console.log(`[ITO] ${THEMES.length} temas carregados com sucesso.`);
-    }
+    if (Array.isArray(loaded) && loaded.length > 0) THEMES = loaded;
 } catch (e) {
-    console.error("[ITO] Erro ao carregar themes.json, usando padrão.", e.message);
+    console.log("[ITO] Usando temas padrão.");
 }
 
 module.exports = (io, socket, RoomManager) => {
     
-    // 1. ENVIAR PISTA
+    const getUserId = (room) => {
+        const player = room.players.find(p => p.socketId === socket.id);
+        return player ? player.userId : socket.data.userId;
+    };
+
+    // 1. INICIAR RODADA (Host escolheu o tema)
+    socket.on('ito_start_round', async ({ roomId, themeType, customTheme }) => {
+        try {
+            const room = await RoomManager.getRoom(roomId);
+            if (!room) return;
+            const userId = getUserId(room);
+
+            // Validação: Só o Escolhedor da vez pode iniciar
+            if (room.state.chooserId && room.state.chooserId !== userId) return;
+
+            // Define o Tema
+            let selectedTheme;
+            if (themeType === 'custom' && customTheme) {
+                selectedTheme = customTheme;
+            } else {
+                selectedTheme = THEMES[Math.floor(Math.random() * THEMES.length)];
+            }
+
+            // Distribui Cartas
+            const deck = createDeck();
+            const playerData = {};
+            
+            room.players.forEach(p => {
+                playerData[p.userId] = {
+                    secretNumber: deck.pop(),
+                    clue: ''
+                };
+            });
+
+            // Atualiza Estado
+            room.state.theme = selectedTheme;
+            room.state.playerData = playerData;
+            room.state.currentOrder = room.players.map(p => p.userId);
+            room.state.phase = 'CLUE_PHASE';
+
+            await RoomManager.saveRoom(room);
+            await broadcastUpdate(io, room);
+
+        } catch(e) { console.error(e); }
+    });
+
+    // 2. ENVIAR PISTA
     socket.on('submit_clue', async ({ roomId, clue }) => {
         try {
             const room = await RoomManager.getRoom(roomId);
             if (!room || !room.state) return;
+            const userId = getUserId(room);
 
-            // Inicializa playerData se não existir
-            if (!room.state.playerData) room.state.playerData = {};
-            // Garante que o jogador tem dados
-            if (!room.state.playerData[socket.data.userId]) return;
+            if (!room.state.playerData[userId]) return;
 
-            room.state.playerData[socket.data.userId].clue = clue;
+            room.state.playerData[userId].clue = clue;
             
-            // Verifica se todos enviaram (apenas quem tem carta)
             const allSubmitted = room.players.every(p => {
                 const pData = room.state.playerData[p.userId];
                 return pData && pData.clue;
@@ -50,21 +96,19 @@ module.exports = (io, socket, RoomManager) => {
         } catch(e) { console.error(e); }
     });
 
-    // 2. REORDENAR CARTAS
+    // 3. REORDENAR
     socket.on('update_order', async ({ roomId, newOrderIds }) => {
         try {
             const room = await RoomManager.getRoom(roomId);
             if (!room) return;
             
             room.state.currentOrder = newOrderIds;
-            
             await RoomManager.saveRoom(room);
-            // Broadcast direto para atualização rápida visual
             socket.to(roomId).emit('update_game_data', { gameData: { currentOrder: newOrderIds } });
         } catch(e) { console.error(e); }
     });
 
-    // 3. REVELAR CARTAS
+    // 4. REVELAR
     socket.on('reveal_cards', async ({ roomId }) => {
         try {
             const room = await RoomManager.getRoom(roomId);
@@ -76,15 +120,16 @@ module.exports = (io, socket, RoomManager) => {
         } catch(e) { console.error(e); }
     });
 
-    // 4. REINICIAR
-    socket.on('ito_restart', async ({ roomId }) => {
+    // 5. NOVA RODADA (Sorteia novo Escolhedor)
+    socket.on('ito_back_to_setup', async ({ roomId }) => {
         try {
             const room = await RoomManager.getRoom(roomId);
             if(room) {
-                // Reinicia lógica mantendo a sala
-                const newState = module.exports.initGame(room); 
-                room.state = newState.gameData; // Atualiza o estado da sala
-                room.phase = newState.phase;
+                const players = room.players;
+                const randomPlayer = players[Math.floor(Math.random() * players.length)];
+                
+                // Passa o ID explicitamente como string
+                module.exports.initGame(room, randomPlayer.userId); 
                 
                 await RoomManager.saveRoom(room);
                 await broadcastUpdate(io, room);
@@ -93,41 +138,41 @@ module.exports = (io, socket, RoomManager) => {
     });
 };
 
-// --- LÓGICA DO JOGO ---
-
-module.exports.initGame = (room) => {
-    const deck = generateDeck(); // Usa a função importada
-    const playerData = {};
+// --- INIT DO JOGO (COM PROTEÇÃO CONTRA O OBJETO IO) ---
+module.exports.initGame = (room, arg2 = null) => {
     
-    room.players.forEach(p => {
-        playerData[p.userId] = {
-            secretNumber: deck.pop(),
-            clue: ''
-        };
-    });
+    // CORREÇÃO DO ERRO CIRCULAR:
+    // Se arg2 for uma String, é o ID do jogador (veio do 'ito_back_to_setup').
+    // Se arg2 for um Objeto (IO) ou null, é o início do jogo (veio do 'server.js').
+    let specificChooserId = null;
+    if (typeof arg2 === 'string') {
+        specificChooserId = arg2;
+    }
 
-    // Escolhe um tema aleatório da lista carregada
-    const randomTheme = THEMES[Math.floor(Math.random() * THEMES.length)];
+    let chooser = specificChooserId;
+    
+    // Se não foi passado um ID válido, define o Host como chooser
+    if (!chooser) {
+        const host = room.players.find(p => p.isHost);
+        chooser = host ? host.userId : room.players[0].userId;
+    }
 
-    // Estado inicial salvo no Redis
     room.state = { 
-        theme: randomTheme, 
-        phase: 'CLUE_PHASE',
-        playerData: playerData,
-        currentOrder: room.players.map(p => p.userId)
+        theme: null, 
+        phase: 'SETUP',
+        playerData: {},
+        currentOrder: [],
+        chooserId: chooser 
     };
-
-    // Retorna para o server.js usar
-    return { phase: 'CLUE_PHASE', gameData: room.state }; 
+    return { phase: 'SETUP' }; 
 };
 
-// --- FILTRO DE DADOS (SEGURANÇA) ---
 function getPublicData(gd, userId) {
     if (!gd) return {};
     
     const isReveal = gd.phase === 'REVEAL';
-
     const publicPlayersData = {};
+
     if (gd.playerData) {
         Object.keys(gd.playerData).forEach(pid => {
             const data = gd.playerData[pid];
@@ -136,7 +181,6 @@ function getPublicData(gd, userId) {
             publicPlayersData[pid] = {
                 clue: data.clue,
                 hasSubmitted: !!data.clue,
-                // O Segredo (Carta) só aparece se for REVEAL ou se for EU mesmo
                 secretNumber: (isReveal || isMe) ? data.secretNumber : null
             };
         });
@@ -146,19 +190,23 @@ function getPublicData(gd, userId) {
         theme: gd.theme,
         phase: gd.phase,
         currentOrder: gd.currentOrder,
-        playersData: publicPlayersData
+        playersData: publicPlayersData,
+        chooserId: gd.chooserId
     };
 }
 
 async function broadcastUpdate(io, room) {
     const sockets = await io.in(room.id).fetchSockets();
     for(const s of sockets) {
+        const player = room.players.find(p => p.socketId === s.id);
+        const targetUserId = player ? player.userId : s.data.userId;
+
         s.emit('joined_room', {
             roomId: room.id,
             players: room.players,
             gameType: 'ITO',
             phase: room.state.phase,
-            gameData: getPublicData(room.state, s.data.userId)
+            gameData: getPublicData(room.state, targetUserId)
         });
     }
 }

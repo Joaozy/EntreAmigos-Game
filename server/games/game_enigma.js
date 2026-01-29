@@ -1,22 +1,37 @@
 const { normalize } = require('../utils/helpers');
 const RoomManager = require('../managers/RoomManager');
 
+// 1. DADOS PADRÃO
 let RIDDLES = [
-    { question: "O que é que quanto mais seca, mais molhada fica?", answers: ["Toalha", "A toalha"] },
-    { question: "O que é, o que é? Cai em pé e corre deitado?", answers: ["Chuva", "A chuva"] },
-    { question: "O que é que anda com os pés na cabeça?", answers: ["Piolho", "O piolho"] },
-    { question: "Tenho cidades, mas não tenho casas. Tenho montanhas, mas não tenho árvores. Tenho água, mas não tenho peixe. O que sou eu?", answers: ["Mapa", "Um mapa"] }
+    { clues: ["Sou feito de algodão.", "Sirvo para secar.", "Fico molhada."], answers: ["Toalha"] }
 ];
 
+// 2. CARREGAMENTO DO JSON (Estilo Perfil)
 try {
     const loaded = require('../data/themes_enigma.json');
-    if (Array.isArray(loaded)) RIDDLES = loaded;
-} catch (e) {}
+    if (Array.isArray(loaded) && loaded.length > 0) {
+        RIDDLES = loaded.map(item => {
+            // Garante formato correto
+            let clueList = [];
+            if (item.clues && Array.isArray(item.clues)) clueList = item.clues;
+            else if (item.question) clueList = [item.question]; // Fallback
 
-// Função de distância para aceitar respostas próximas (erros de digitação leves)
+            let ans = [];
+            if (item.answer) ans = [item.answer];
+            else if (item.answers) ans = item.answers;
+
+            return { clues: clueList, answers: ans };
+        });
+        console.log(`[ENIGMA/PERFIL] ${RIDDLES.length} cartas carregadas.`);
+    }
+} catch (e) {
+    console.log("[ENIGMA] Erro JSON. Usando padrão.");
+}
+
 const checkAnswer = (guess, answers) => {
-    const normGuess = normalize(guess).toLowerCase();
-    return answers.some(ans => normalize(ans).toLowerCase() === normGuess);
+    if (!guess || !answers) return false;
+    const normGuess = normalize(guess).toLowerCase().trim();
+    return answers.some(ans => normalize(ans).toLowerCase().trim() === normGuess);
 };
 
 module.exports = (io, socket, RoomManager) => {
@@ -25,93 +40,120 @@ module.exports = (io, socket, RoomManager) => {
     socket.on('enigma_guess', async ({ roomId, guess }) => {
         try {
             const room = await RoomManager.getRoom(roomId);
-            if (!room || room.state.phase !== 'PLAYING') return;
+            if (!room || !room.state || room.state.phase !== 'PLAYING') return;
 
-            // Verifica se a resposta está certa
             if (checkAnswer(guess, room.state.currentRiddle.answers)) {
                 const player = room.players.find(p => p.userId === socket.data.userId);
                 
-                // Pontuação e Vitória
-                if (player) player.score += 10;
+                // --- PONTUAÇÃO ESTILO PERFIL ---
+                // Dica 1 = 10pts, Dica 2 = 9pts... Mínimo 1pt.
+                const points = Math.max(1, 10 - room.state.currentClueIndex);
+                
+                if (player) player.score += points;
                 
                 room.state.winner = player ? player.nickname : "Alguém";
+                room.state.winPoints = points; // Para mostrar na tela de vitória
                 room.state.phase = 'REVEAL';
                 
                 await RoomManager.saveRoom(room);
                 await broadcastUpdate(io, room);
             } else {
-                // Feedback visual apenas para quem errou (opcional, feito no front)
-                socket.emit('enigma_wrong', 'Resposta incorreta!');
+                socket.emit('enigma_wrong');
             }
         } catch(e) { console.error(e); }
     });
 
-    // 2. PRÓXIMO ENIGMA
+    // 2. REVELAR PRÓXIMA DICA (Host)
+    socket.on('enigma_reveal_clue', async ({ roomId }) => {
+        try {
+            const room = await RoomManager.getRoom(roomId);
+            // Só host pode, e só se ainda houver dicas
+            if (room && room.state.phase === 'PLAYING') {
+                const totalClues = room.state.currentRiddle.clues.length;
+                if (room.state.currentClueIndex < totalClues - 1) {
+                    room.state.currentClueIndex++;
+                    await RoomManager.saveRoom(room);
+                    await broadcastUpdate(io, room);
+                }
+            }
+        } catch(e) { console.error(e); }
+    });
+
+    // 3. PRÓXIMA CARTA (Nova Rodada)
     socket.on('enigma_next', async ({ roomId }) => {
         try {
             const room = await RoomManager.getRoom(roomId);
             if (room && room.players.find(p => p.userId === socket.data.userId)?.isHost) {
-                await startNewRound(io, room);
+                if (room.state.deck.length === 0) {
+                    room.state.phase = 'GAME_OVER';
+                } else {
+                    room.state.currentRiddle = room.state.deck.pop();
+                    room.state.phase = 'PLAYING';
+                    room.state.currentClueIndex = 0; // Reseta dicas
+                    room.state.winner = null;
+                    room.state.round++;
+                }
+                await RoomManager.saveRoom(room);
+                await broadcastUpdate(io, room);
             }
         } catch(e) { console.error(e); }
     });
 };
 
-// --- LÓGICA ---
-
+// --- INIT SÍNCRONO ---
 module.exports.initGame = (room, io) => {
-    // Zera scores
     room.players.forEach(p => p.score = 0);
 
-    room.state = {
-        deck: [...RIDDLES].sort(() => 0.5 - Math.random()), // Embaralha
-        currentRiddle: null,
-        round: 0,
-        phase: 'PLAYING',
-        winner: null
-    };
-
-    if(io) startNewRound(io, room);
-    return { phase: 'PLAYING', gameData: getPublicData(room.state) };
-};
-
-async function startNewRound(io, room) {
-    const gd = room.state;
+    const deck = [...RIDDLES].sort(() => 0.5 - Math.random());
     
-    if (gd.deck.length === 0) {
-        gd.phase = 'GAME_OVER';
-    } else {
-        gd.currentRiddle = gd.deck.pop();
-        gd.phase = 'PLAYING';
-        gd.winner = null;
-        gd.round++;
+    let firstRiddle = null;
+    let initialPhase = 'GAME_OVER';
+
+    if (deck.length > 0) {
+        firstRiddle = deck.pop();
+        initialPhase = 'PLAYING';
     }
 
-    await RoomManager.saveRoom(room);
-    await broadcastUpdate(io, room);
-}
+    room.state = {
+        deck: deck,
+        currentRiddle: firstRiddle,
+        currentClueIndex: 0, // Começa na dica 0 (a primeira)
+        round: 1,
+        phase: initialPhase,
+        winner: null,
+        winPoints: 0
+    };
 
-// --- FILTRO DE DADOS ---
+    console.log(`[PERFIL] Iniciado.`);
+    return { phase: initialPhase };
+};
+
 function getPublicData(gd) {
     if (!gd) return {};
     
-    // Esconde a resposta, exceto no final
-    const riddlePublic = gd.currentRiddle ? {
-        question: gd.currentRiddle.question,
-        // answers: undefined // NÃO ENVIA AS RESPOSTAS
-    } : null;
-
-    if (gd.phase === 'REVEAL') {
-        // Se revelou, manda a resposta principal para mostrar
-        riddlePublic.answer = gd.currentRiddle.answers[0];
+    // Envia apenas as dicas desbloqueadas até agora
+    let visibleClues = [];
+    if (gd.currentRiddle && gd.currentRiddle.clues) {
+        // Pega do índice 0 até o índice atual + 1
+        visibleClues = gd.currentRiddle.clues.slice(0, gd.currentClueIndex + 1);
     }
 
-    return {
+    const publicData = {
         round: gd.round,
         phase: gd.phase,
-        currentRiddle: riddlePublic,
-        winner: gd.winner
+        visibleClues: visibleClues,
+        totalClues: gd.currentRiddle ? gd.currentRiddle.clues.length : 0,
+        currentPoints: Math.max(1, 10 - (gd.currentClueIndex || 0)), // Valor atual da rodada
+        winner: gd.winner,
+        winPoints: gd.winPoints
     };
+
+    if (gd.phase === 'REVEAL' && gd.currentRiddle) {
+        publicData.answer = gd.currentRiddle.answers[0];
+        publicData.allClues = gd.currentRiddle.clues; // Mostra tudo no final
+    }
+
+    return publicData;
 }
 
 async function broadcastUpdate(io, room) {

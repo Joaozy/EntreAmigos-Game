@@ -1,83 +1,108 @@
 import React from 'react';
-import { GameProvider, useGame } from './context/GameContext';
-import Login from './components/Login';
-import Lobby from './components/Lobby';
-import WaitingRoom from './components/WaitingRoom'; 
-import Chat from './Chat'; // <--- IMPORTANTE
+import { useGame } from './context/GameContext';
 
-// IMPORTE TODOS OS JOGOS
-import GameTable from './GameTable'; // ITO
-import GameChaCafe from './GameChaCafe';
-import GameMegaQuiz from './GameMegaQuiz';
-import GameWhoAmI from './GameWhoAmI';
-import GameCodenames from './GameCodenames';
-import GameStop from './GameStop';
+// Telas Gerais
+import Login from './components/Login';
+import Lobby from './components/Lobby'; // <--- IMPORTANTE: Certifique-se que o Lobby.jsx abaixo esteja salvo aqui
+import WaitingRoom from './components/WaitingRoom';
+
+// Jogos
 import GameTermo from './GameTermo';
-import GameCinemoji from './GameCinemoji';
+import GameMegaQuiz from './GameMegaQuiz';
 import GameDixit from './GameDixit';
+import GameStop from './GameStop';
+import GameCodenames from './GameCodenames';
+import GameWhoAmI from './GameWhoAmI';
+import GameCinemoji from './GameCinemoji';
+import GameChaCafe from './GameChaCafe';
 import GameSpy from './GameSpy';
 import GameEnigma from './GameEnigma';
+import GameTable from './GameTable'; // ITO
 
-function AppContent() {
-  const { view, selectedGame, currentPhase, roomId, nickname } = useGame();
+export default function App() {
+    const { 
+        user, 
+        nickname,
+        currentPhase, 
+        gameType, 
+        roomId, 
+        isLoading, 
+        error,
+        criarSala,
+        entrarSala,
+        sairDoJogo,
+        deslogar // <--- PEGANDO A NOVA FUNÇÃO
+    } = useGame();
 
-  // 1. TELA DE LOGIN
-  if (view === 'HOME') return <Login />;
+    // 1. CARREGAMENTO
+    if (isLoading) {
+        return (
+            <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white">
+                <div className="animate-spin rounded-full h-12 w-12 border-t-4 border-b-4 border-blue-500 mb-4"></div>
+                <p className="text-slate-400 font-bold animate-pulse">Carregando...</p>
+            </div>
+        );
+    }
 
-  // 2. DASHBOARD (Menu)
-  if (view === 'LOBBY' || view === 'DASHBOARD') return <Lobby />;
+    // 2. ERRO
+    if (error) {
+        return (
+            <div className="min-h-screen bg-red-900 flex flex-col items-center justify-center text-white p-6">
+                <h1 className="text-3xl font-bold mb-2">Ops!</h1>
+                <p className="bg-black/30 p-4 rounded mb-6 text-xl border border-red-500">{error}</p>
+                <button onClick={() => window.location.reload()} className="bg-white text-red-900 px-8 py-3 rounded-full font-bold shadow-lg hover:scale-105 transition">
+                    Tentar Novamente
+                </button>
+            </div>
+        );
+    }
 
-  // 3. DENTRO DA SALA (JOGO)
-  if (view === 'GAME') {
-    return (
-        <>
-            {/* O Jogo em si */}
-            <GameComponent selectedGame={selectedGame} currentPhase={currentPhase} />
-            
-            {/* Chat Flutuante (Só aparece se tiver roomId) */}
-            {roomId && <Chat roomId={roomId} nickname={nickname} />}
-        </>
-    );
-  }
+    // 3. LOGIN
+    if (!user) {
+        return <Login />;
+    }
 
-  return null;
-}
+    // 4. LOBBY (Sem Sala)
+    if (!roomId) {
+        return (
+            <Lobby 
+                nickname={nickname} 
+                onCreate={criarSala} 
+                onJoin={entrarSala} 
+                onLogout={deslogar} // <--- AQUI A CORREÇÃO: Passamos deslogar
+            />
+        );
+    }
 
-// Componente auxiliar para limpar o switch/case
-function GameComponent({ selectedGame, currentPhase }) {
-    // Se a fase for LOBBY, mostra a Sala de Espera Unificada
+    // 5. SALA DE ESPERA
     if (currentPhase === 'LOBBY') {
         return <WaitingRoom />;
     }
 
-    switch (selectedGame) {
-      case 'ITO': return <GameTable />;
-      case 'CHA_CAFE': return <GameChaCafe />;
-      case 'MEGAQUIZ': return <GameMegaQuiz />;
-      case 'WHOAMI': return <GameWhoAmI />;
-      case 'CODENAMES': return <GameCodenames />;
-      case 'STOP': return <GameStop />;
-      case 'TERMO': return <GameTermo />;
-      case 'CINEMOJI': return <GameCinemoji />;
-      case 'DIXIT': return <GameDixit />;
-      case 'SPY': return <GameSpy />;
-      case 'ENIGMA': return <GameEnigma />;
-      default: 
-        return (
-            <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white">
-                <div className="text-center">
-                    <h1 className="text-2xl font-bold mb-2">Erro 404</h1>
-                    <p>Jogo "{selectedGame}" não encontrado.</p>
+    // 6. JOGOS
+    switch (gameType) {
+        case 'TERMO':       return <GameTermo />;
+        case 'MEGAQUIZ':    return <GameMegaQuiz />;
+        case 'DIXIT':       return <GameDixit />;
+        case 'STOP':        return <GameStop />;
+        case 'CODENAMES':   return <GameCodenames />;
+        case 'WHOAMI':      return <GameWhoAmI />;
+        case 'CINEMOJI':    return <GameCinemoji />;
+        case 'CHACAFE':     return <GameChaCafe />;
+        case 'SPY':         return <GameSpy />;
+        case 'ENIGMA':      return <GameEnigma />;
+        case 'ITO':         return <GameTable />; 
+        case 'TABLE':       return <GameTable />;
+        
+        default:
+            return (
+                <div className="min-h-screen flex flex-col items-center justify-center bg-slate-800 text-white">
+                    <h1 className="text-3xl font-bold mb-2 text-yellow-400">Em Desenvolvimento</h1>
+                    <p className="mb-6 text-slate-400">O jogo <b>{gameType}</b> ainda não está pronto.</p>
+                    <button onClick={sairDoJogo} className="bg-red-600 hover:bg-red-500 px-6 py-2 rounded-lg font-bold transition">
+                        Voltar para o Lobby
+                    </button>
                 </div>
-            </div>
-        );
+            );
     }
-}
-
-export default function App() {
-  return (
-    <GameProvider>
-      <AppContent />
-    </GameProvider>
-  );
 }

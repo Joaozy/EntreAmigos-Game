@@ -1,191 +1,299 @@
 const { shuffle } = require('../utils/helpers');
 const RoomManager = require('../managers/RoomManager');
 
-let CHARACTERS = ["Batman", "Monalisa", "Einstein", "Bob Esponja", "Harry Potter", "Goku", "Sherlock Holmes", "Cleópatra"];
+// 1. Lista Padrão (Fallback)
+let CHARACTERS = [
+    "Batman", "Mickey Mouse", "Jesus Cristo", "Michael Jackson", 
+    "Pelé", "Rainha Elizabeth", "Harry Potter", "Bob Esponja",
+    "Darth Vader", "Pikachu", "Neymar", "Faustão",
+    "Goku", "Homem Aranha", "Barbie", "Super Mario",
+    "Anitta", "Silvio Santos", "Lula", "Bolsonaro",
+    "Chapolin", "Chaves", "Naruto", "Capitão América",
+    "Elsa (Frozen)", "Shrek", "Scooby Doo", "Tom Cruise"
+];
+
+// 2. Tenta carregar do JSON
 try {
-    const loaded = require('../data/themes_whoami.json');
-    if(Array.isArray(loaded) && loaded.length > 0) CHARACTERS = loaded;
-} catch(e){}
+    // Certifique-se que o arquivo existe em server/data/themes_whoami.json
+    const customList = require('../data/themes_whoami.json');
+    
+    // Validação simples para garantir que é uma lista válida
+    if (Array.isArray(customList) && customList.length > 0) {
+        CHARACTERS = customList;
+        console.log(`[WHOAMI] Sucesso! Carregados ${CHARACTERS.length} personagens do arquivo JSON.`);
+    }
+} catch (e) {
+    console.log("[WHOAMI] Arquivo themes_whoami.json não encontrado ou inválido. Usando lista padrão.");
+}
 
 module.exports = (io, socket, RoomManager) => {
-    
+
     // 1. FAZER PERGUNTA
     socket.on('whoami_ask', async ({ roomId, question }) => {
         try {
             const room = await RoomManager.getRoom(roomId);
-            if(!room || !room.state || room.state.phase !== 'PLAYING') return;
+            if (!room || !room.state || socket.data.userId !== room.state.currentPlayerId) return;
 
-            if (room.state.currentTurnId !== socket.data.userId) return;
-
-            room.state.currentQuestion = question;
-            room.state.phase = 'VOTING';
-            room.state.votes = {};
+            const player = room.players.find(p => p.userId === socket.data.userId);
             
+            room.state.questionLog.unshift({
+                nickname: player.nickname,
+                text: question,
+                type: 'QUESTION',
+                timestamp: Date.now()
+            });
+
+            // Reseta os votos para a nova pergunta
+            room.state.currentVotes = {}; 
+            room.state.currentAction = 'WAITING_ANSWER'; 
+
             await RoomManager.saveRoom(room);
             await broadcastUpdate(io, room);
-
-        } catch(e) { console.error(e); }
+        } catch (e) { console.error(e); }
     });
 
-    // 2. VOTAR (SIM/NÃO)
-    socket.on('whoami_vote', async ({ roomId, vote }) => {
+    // 2. ENVIAR CHUTE
+    socket.on('whoami_guess_attempt', async ({ roomId, guess }) => {
         try {
             const room = await RoomManager.getRoom(roomId);
-            if(!room || !room.state || room.state.phase !== 'VOTING') return;
+            if (!room || !room.state || socket.data.userId !== room.state.currentPlayerId) return;
 
-            // Quem perguntou não vota
-            if (socket.data.userId === room.state.currentTurnId) return;
+            const player = room.players.find(p => p.userId === socket.data.userId);
 
-            room.state.votes[socket.data.userId] = vote;
+            room.state.questionLog.unshift({
+                nickname: player.nickname,
+                text: `CHUTOU: "${guess}"`,
+                type: 'GUESS_ATTEMPT',
+                timestamp: Date.now()
+            });
+
+            // No chute, a validação continua sendo "primeiro que responder define"
+            // (mas se quiser votação aqui também, a lógica seria similar à da pergunta)
+            // Por enquanto mantemos validação direta pelos outros
+            room.state.currentAction = 'WAITING_VALIDATION'; 
+            await RoomManager.saveRoom(room);
+            await broadcastUpdate(io, room);
+        } catch (e) { console.error(e); }
+    });
+
+    // 3. RESPONDER PERGUNTA (VOTAÇÃO COLETIVA)
+    socket.on('whoami_answer', async ({ roomId, answer }) => {
+        try {
+            const room = await RoomManager.getRoom(roomId);
+            if (!room || !room.state) return;
+            if (socket.data.userId === room.state.currentPlayerId) return; // Jogador da vez não vota
+
+            // Registra o voto
+            if (!room.state.currentVotes) room.state.currentVotes = {};
+            room.state.currentVotes[socket.data.userId] = answer;
+
+            // Quem precisa votar? (Todos exceto: o da vez, quem venceu, quem desistiu)
+            const activeVoters = room.players.filter(p => 
+                p.userId !== room.state.currentPlayerId &&
+                !room.state.finished.includes(p.userId) &&
+                !room.state.surrendered.includes(p.userId)
+            );
+
+            // Verificamos se todos votaram
+            const votesCount = Object.keys(room.state.currentVotes).length;
             
-            // Verifica se todos votaram (Total de jogadores - 1)
-            const votersCount = room.players.length - 1;
-            
-            if (Object.keys(room.state.votes).length >= votersCount) {
-                room.state.phase = 'RESULT';
-                await RoomManager.saveRoom(room);
-                await broadcastUpdate(io, room);
+            // Se activeVoters for 0 (ninguém pra responder), destrava o jogo
+            const requiredVotes = activeVoters.length > 0 ? activeVoters.length : 0;
 
-                // Delay para voltar ao jogo
-                setTimeout(async () => {
-                    const r = await RoomManager.getRoom(roomId);
-                    if(r) {
-                        nextTurn(r);
-                        await RoomManager.saveRoom(r);
-                        await broadcastUpdate(io, r);
-                    }
-                }, 5000);
+            if (votesCount >= requiredVotes) {
+                // TODOS VOTARAM! CALCULAR RESULTADO.
+                const votes = Object.values(room.state.currentVotes);
+                const countYes = votes.filter(v => v === 'YES').length;
+                const countNo = votes.filter(v => v === 'NO').length;
+                const countMaybe = votes.filter(v => v === 'MAYBE').length;
+
+                // Cria string de resumo
+                let summary = [];
+                if (countYes > 0) summary.push(`${countYes} SIM`);
+                if (countNo > 0) summary.push(`${countNo} NÃO`);
+                if (countMaybe > 0) summary.push(`${countMaybe} TALVEZ`);
+
+                room.state.questionLog.unshift({
+                    nickname: "Consenso",
+                    text: `Resultado: ${summary.join(', ') || 'Sem resposta'}`,
+                    type: 'ANSWER_SUMMARY',
+                    variant: (countYes >= countNo ? 'YES' : 'NO'), 
+                    timestamp: Date.now()
+                });
+
+                // Limpa votos e passa a vez
+                room.state.currentVotes = {};
+                await nextTurn(io, room);
+
             } else {
+                // AINDA FALTAM VOTOS -> Apenas atualiza a tela
                 await RoomManager.saveRoom(room);
                 await broadcastUpdate(io, room);
             }
-        } catch(e) { console.error(e); }
+
+        } catch (e) { console.error(e); }
     });
 
-    // 3. TENTAR ADIVINHAR
-    socket.on('whoami_guess', async ({ roomId, guess }) => {
+    // 4. VALIDAR CHUTE
+    socket.on('whoami_validate_guess', async ({ roomId, isCorrect }) => {
         try {
             const room = await RoomManager.getRoom(roomId);
-            if(!room || !room.state) return;
-            
-            if (socket.data.userId !== room.state.currentTurnId) return;
-            
-            const userId = socket.data.userId;
-            const character = room.state.assignments[userId];
-            const player = room.players.find(p => p.userId === userId);
+            if (!room || !room.state) return;
+            if (socket.data.userId === room.state.currentPlayerId) return;
 
-            if (guess.toLowerCase().trim() === character.toLowerCase().trim()) {
-                if (player) player.isGuessed = true; // Marca vitória pública
-                io.to(roomId).emit('receive_message', { nickname: 'SISTEMA', text: `🎉 ${player?.nickname} acertou! Era ${character}.` });
+            const player = room.players.find(p => p.userId === room.state.currentPlayerId);
+
+            if (isCorrect) {
+                room.state.finished.push(player.userId);
+                room.state.questionLog.unshift({
+                    nickname: "SISTEMA",
+                    text: `${player.nickname} ACERTOU e venceu!`,
+                    type: 'SYSTEM',
+                    timestamp: Date.now()
+                });
             } else {
-                io.to(roomId).emit('receive_message', { nickname: 'SISTEMA', text: `🚫 ${player?.nickname} errou! (Chutou ${guess})` });
+                room.state.questionLog.unshift({
+                    nickname: "SISTEMA",
+                    text: `Errou o chute! Perdeu a vez.`,
+                    type: 'SYSTEM',
+                    timestamp: Date.now()
+                });
             }
+
+            await nextTurn(io, room);
+
+        } catch (e) { console.error(e); }
+    });
+
+    // 5. DESISTIR
+    socket.on('whoami_give_up', async ({ roomId }) => {
+        try {
+            const room = await RoomManager.getRoom(roomId);
+            if (!room || !room.state) return;
             
-            nextTurn(room);
-            await RoomManager.saveRoom(room);
-            await broadcastUpdate(io, room);
+            if (!room.state.surrendered.includes(socket.data.userId)) {
+                room.state.surrendered.push(socket.data.userId);
+                room.state.questionLog.unshift({
+                    nickname: "SISTEMA",
+                    text: `${socket.data.nickname || 'Alguém'} desistiu.`,
+                    type: 'SYSTEM',
+                    timestamp: Date.now()
+                });
+            }
 
-        } catch(e) { console.error(e); }
-    });
-
-    // 4. DICAS
-    socket.on('whoami_request_hint', async ({ roomId }) => {
-        const room = await RoomManager.getRoom(roomId);
-        if(!room) return;
-        room.state.phase = 'HINT_MODE';
-        await RoomManager.saveRoom(room);
-        await broadcastUpdate(io, room);
-    });
-
-    socket.on('whoami_send_hint', async ({ roomId, hint }) => {
-        const room = await RoomManager.getRoom(roomId);
-        if(!room) return;
-        
-        room.state.phase = 'PLAYING';
-        io.to(roomId).emit('receive_message', { nickname: 'DICA', text: `💡 ${hint}` });
-        
-        // Consome a dica do jogador atual
-        const p = room.players.find(p => p.userId === room.state.currentTurnId);
-        if(p) p.hasHintAvailable = false;
-        
-        await RoomManager.saveRoom(room);
-        await broadcastUpdate(io, room);
+            if (room.state.currentPlayerId === socket.data.userId) {
+                await nextTurn(io, room);
+            } else {
+                await broadcastUpdate(io, room);
+            }
+        } catch (e) { console.error(e); }
     });
 };
 
-// --- HELPERS ---
+// --- LÓGICA INTERNA ---
+
+async function nextTurn(io, room) {
+    let currentIdx = room.players.findIndex(p => p.userId === room.state.currentPlayerId);
+    let attempts = 0;
+    let found = false;
+
+    // Tenta achar o próximo jogador válido
+    while (attempts < room.players.length) {
+        currentIdx = (currentIdx + 1) % room.players.length;
+        const nextUserId = room.players[currentIdx].userId;
+        
+        const isFinished = room.state.finished.includes(nextUserId);
+        const isSurrendered = room.state.surrendered.includes(nextUserId);
+
+        if (!isFinished && !isSurrendered) {
+            room.state.currentPlayerId = nextUserId;
+            room.state.currentAction = 'DECIDING';
+            found = true;
+            break;
+        }
+        attempts++;
+    }
+
+    if (!found) {
+        room.state.phase = 'GAME_OVER';
+        room.state.currentPlayerId = null;
+    }
+    
+    await RoomManager.saveRoom(room);
+    await broadcastUpdate(io, room);
+}
 
 module.exports.initGame = (room, io) => {
+    // USA A LISTA QUE FOI CARREGADA NO INÍCIO
     const deck = shuffle([...CHARACTERS]);
     const assignments = {};
 
-    room.players.forEach(p => { 
-        assignments[p.userId] = deck.pop() || "Curinga"; 
-        p.isGuessed = false; 
-        p.hasHintAvailable = true; 
+    room.players.forEach(p => {
+        p.score = 0;
+        if (deck.length > 0) assignments[p.userId] = deck.pop();
+        else assignments[p.userId] = "Coringa";
     });
 
-    room.state = { 
-        assignments, 
-        currentTurnId: room.players[0].userId, 
-        totalQuestions: 0, 
-        currentQuestion: null, 
-        votes: {}, 
+    room.state = {
+        assignments,
+        currentPlayerId: room.players[0].userId,
+        currentAction: 'DECIDING', 
+        surrendered: [], 
+        finished: [], 
+        questionLog: [],
+        currentVotes: {}, 
         phase: 'PLAYING'
     };
 
-    return { phase: 'PLAYING', gameData: getPublicData(room.state, null) };
+    console.log(`[WHOAMI] Jogo iniciado com palavras: ${Object.values(assignments).join(', ')}`);
+    return { phase: 'PLAYING' };
 };
 
-function nextTurn(room) {
-    room.state.phase = 'PLAYING'; 
-    room.state.currentQuestion = null; 
-    room.state.votes = {};
+function getPublicData(gd, userId) {
+    if (!gd) return {};
     
-    let currentIdx = room.players.findIndex(p => p.userId === room.state.currentTurnId);
-    let attempts = 0;
+    const publicAssignments = {};
+    const iAmDone = (gd.surrendered && gd.surrendered.includes(userId)) || 
+                    (gd.finished && gd.finished.includes(userId));
     
-    // Passa a vez (pula quem já ganhou)
-    do { 
-        currentIdx = (currentIdx + 1) % room.players.length; 
-        attempts++; 
-    } while (room.players[currentIdx].isGuessed && attempts < room.players.length);
-    
-    room.state.currentTurnId = room.players[currentIdx].userId;
-    room.state.totalQuestions++;
+    if (gd.assignments) {
+        Object.keys(gd.assignments).forEach(pId => {
+            // Se for eu E eu não terminei => Esconde
+            if (pId === userId && !iAmDone) {
+                publicAssignments[pId] = "???"; 
+            } else {
+                publicAssignments[pId] = gd.assignments[pId]; 
+            }
+        });
+    }
+
+    return {
+        assignments: publicAssignments,
+        currentPlayerId: gd.currentPlayerId,
+        currentAction: gd.currentAction,
+        questionLog: gd.questionLog || [],
+        surrendered: gd.surrendered || [],
+        finished: gd.finished || [],
+        currentVotes: gd.currentVotes || {},
+        phase: gd.phase
+    };
 }
 
 async function broadcastUpdate(io, room) {
     const sockets = await io.in(room.id).fetchSockets();
     for(const s of sockets) {
+        const player = room.players.find(p => p.socketId === s.id);
+        const targetUserId = player ? player.userId : s.data.userId;
+        const safeGameData = getPublicData(room.state, targetUserId);
+
         s.emit('joined_room', {
             roomId: room.id,
             players: room.players,
             gameType: 'WHOAMI',
             phase: room.state.phase,
-            gameData: getPublicData(room.state, s.data.userId)
+            gameData: safeGameData
         });
     }
-}
-
-function getPublicData(gd, userId) {
-    if(!gd || !gd.assignments) return {};
-
-    const playersData = Object.keys(gd.assignments).map(pId => {
-        const character = gd.assignments[pId];
-        // SEGREDO: Se sou eu, vejo "???", senão vejo o nome.
-        const isMe = pId === userId;
-        return {
-            userId: pId,
-            character: isMe ? "???" : character
-        };
-    });
-
-    return {
-        ...gd,
-        playersData,
-        assignments: undefined // Remove o objeto completo pra não vazar
-    };
 }
 
 module.exports.getPublicData = getPublicData;

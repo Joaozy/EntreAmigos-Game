@@ -3,286 +3,288 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
-const path = require('path'); // <--- IMPORTANTE PARA SERVIR O FRONTEND
+const path = require('path');
 const { createAdapter } = require("@socket.io/redis-adapter");
 const { connectRedis, pubClient, subClient } = require('./config/redis');
 const RoomManager = require('./managers/RoomManager');
 
-// --- CARREGA MÓDULOS DOS JOGOS ---
+// IMPORTAÇÃO DOS JOGOS
 const GAME_MODULES = {
-    'ITO': require('./games/game_ito'),
-    'CHA_CAFE': require('./games/game_chacafe'),
-    'MEGAQUIZ': require('./games/game_megaquiz'),
-    'WHOAMI': require('./games/game_whoami'),
-    'CODENAMES': require('./games/game_codenames'),
-    'STOP': require('./games/game_stop'),
     'TERMO': require('./games/game_termo'),
-    'CINEMOJI': require('./games/game_cinemoji'),
+    'MEGAQUIZ': require('./games/game_megaquiz'),
     'DIXIT': require('./games/game_dixit'),
+    'STOP': require('./games/game_stop'),
+    'CODENAMES': require('./games/game_codenames'),
+    'WHOAMI': require('./games/game_whoami'),
+    'CINEMOJI': require('./games/game_cinemoji'),
+    'CHACAFE': require('./games/game_chacafe'),
     'SPY': require('./games/game_spy'),
     'ENIGMA': require('./games/game_enigma'),
+    'ITO': require('./games/game_ito'),
+    'TABLE': require('./games/game_table') 
 };
 
 const app = express();
-app.use(cors());
+app.use(cors({
+    origin: "*",
+    methods: ["GET", "POST"]
+}));
 
-// --- AJUSTE CRUCIAL: SERVIR FRONTEND REACT ---
-// Isso faz o Node entregar a pasta 'dist' (ou 'build') onde está o React compilado
+// Rota para assets (cartas, imagens)
+app.use(express.static(path.join(__dirname, '../client/public')));
+// Rota para o build do React
 const buildPath = path.join(__dirname, '../client/dist');
 app.use(express.static(buildPath));
 
-// Qualquer rota que não seja API/Socket será redirecionada para o index.html do React
-// Isso permite que o React Router funcione corretamente (ex: /sala/XYZ)
-app.get('*', (req, res) => {
-    res.sendFile(path.join(buildPath, 'index.html'));
-});
-
 const server = http.createServer(app);
+
+// --- MAPA DE SESSÕES GLOBAIS (UserId -> SocketId) ---
+// Isso garante que cada usuário só tenha 1 conexão ativa
+const userSessions = {}; 
 
 (async () => {
     try {
-        console.log("⏳ Iniciando serviços...");
+        console.log("⏳ Iniciando servidor...");
         await connectRedis();
 
         const io = new Server(server, {
-            cors: { origin: "*", methods: ["GET", "POST"] },
+            cors: { 
+                origin: "*", // Aceita qualquer origem (útil se o front e back estiverem em domínios diferentes)
+                methods: ["GET", "POST"],
+                credentials: true
+            },
             adapter: createAdapter(pubClient, subClient)
         });
 
         io.on('connection', (socket) => {
-            console.log(`[+] Cliente conectado: ${socket.id}`);
+            console.log(`[+] Nova conexão: ${socket.id}`);
 
-            // Injeta dependências nos módulos de jogo
-            Object.values(GAME_MODULES).forEach(gameModule => {
-                if (typeof gameModule === 'function') {
-                    gameModule(io, socket, RoomManager);
-                }
+            // Injeta dependências nos jogos
+            Object.values(GAME_MODULES).forEach(mod => {
+                if (typeof mod === 'function') mod(io, socket, RoomManager);
             });
 
-            // 1. IDENTIFICAÇÃO DO USUÁRIO
-            socket.on('identify', ({ userId, nickname }) => {
+            // --- 1. IDENTIFICAÇÃO (LOGIN ÚNICO) ---
+            socket.on('identify', async ({ userId, nickname }) => {
+                if (!userId) return;
+
+                // VERIFICA SE JÁ ESTÁ LOGADO EM OUTRO LUGAR
+                const previousSocketId = userSessions[userId];
+                
+                if (previousSocketId && previousSocketId !== socket.id) {
+                    console.log(`[AUTH] 🚫 Derrubando sessão anterior de ${nickname} (Socket ${previousSocketId})`);
+                    
+                    // Avisa o socket antigo para se desconectar
+                    io.to(previousSocketId).emit('force_disconnect', { 
+                        reason: 'Você conectou em outro dispositivo.' 
+                    });
+                    
+                    // Força a desconexão do socket antigo
+                    const oldSocket = io.sockets.sockets.get(previousSocketId);
+                    if (oldSocket) oldSocket.disconnect(true);
+                }
+
+                // Registra nova sessão
+                userSessions[userId] = socket.id;
                 socket.data.userId = userId;
                 socket.data.nickname = nickname;
+                console.log(`[AUTH] ✅ Sessão registrada: ${nickname} -> ${socket.id}`);
             });
 
-            // 2. RECONEXÃO (Com proteção contra salas expiradas)
+            // --- 2. RECONEXÃO INTELIGENTE (F5) ---
             socket.on('rejoin_room', async ({ roomId, userId }) => {
-                if (!roomId) return;
-                const effectiveUserId = userId || socket.data.userId;
-                
+                if (userId) {
+                    userSessions[userId] = socket.id;
+                    socket.data.userId = userId;
+                }
+
                 const room = await RoomManager.getRoom(roomId);
-                
-                if (room) {
-                    // Sucesso: Reconecta
+                if (room && room.players.find(p => p.userId === userId)) {
                     socket.join(roomId);
                     socket.data.roomId = roomId;
-                    socket.data.userId = effectiveUserId;
                     
-                    const player = room.players.find(p => p.userId === effectiveUserId);
+                    const player = room.players.find(p => p.userId === userId);
                     if (player) {
                         player.socketId = socket.id;
                         player.isOnline = true;
-                        console.log(`[↻] Player ${player.nickname} reconectou na sala ${roomId}`);
+                        socket.data.nickname = player.nickname;
                         await RoomManager.saveRoom(room);
                     }
 
-                    // Prepara dados personalizados (segurança)
-                    let gameDataToSend = room.state;
-                    const gameModule = GAME_MODULES[room.gameType];
-                    if (gameModule && typeof gameModule.getPublicData === 'function') {
-                        gameDataToSend = gameModule.getPublicData(room.state, effectiveUserId);
-                    }
+                    // Envia dados
+                    let gd = room.state;
+                    const mod = GAME_MODULES[room.gameType];
+                    if (mod && mod.getPublicData) gd = mod.getPublicData(room.state, userId);
 
                     socket.emit('joined_room', {
                         roomId,
                         players: room.players,
                         gameType: room.gameType,
                         phase: room.phase,
-                        gameData: gameDataToSend || {}
+                        gameData: gd || {}
                     });
+                    console.log(`[REJOIN] ${player.nickname} voltou para ${roomId}`);
                 } else {
-                    // Falha: Sala não existe mais -> Avisa o cliente para limpar cache
-                    console.log(`[🚫] Rejoin falhou: Sala ${roomId} não encontrada.`);
                     socket.emit('rejoin_failed');
                 }
             });
 
-            // 3. CRIAR SALA
+            // --- 3. CRIAR SALA ---
             socket.on('create_room', async ({ nickname, gameId, userId }) => {
                 const roomId = Math.random().toString(36).substring(2, 6).toUpperCase();
-                const selectedGame = gameId || 'TERMO';
-
                 const newRoom = {
-                    id: roomId, players: [], gameType: selectedGame, 
-                    phase: 'LOBBY', state: {}, createdAt: Date.now()
+                    id: roomId,
+                    players: [{
+                        id: socket.id, socketId: socket.id, userId, nickname,
+                        isHost: true, score: 0, isOnline: true
+                    }],
+                    gameType: gameId || 'TERMO',
+                    phase: 'LOBBY',
+                    state: {},
+                    createdAt: Date.now()
                 };
 
-                const player = { 
-                    id: socket.id, socketId: socket.id, userId: userId || socket.id,
-                    nickname, isHost: true, score: 0, isOnline: true
-                };
-                
-                newRoom.players.push(player);
                 await RoomManager.saveRoom(newRoom);
-
                 socket.join(roomId);
                 socket.data.roomId = roomId;
                 socket.data.userId = userId;
 
-                socket.emit('joined_room', { 
-                    roomId, players: newRoom.players, gameType: selectedGame, phase: 'LOBBY'
+                socket.emit('joined_room', {
+                    roomId, players: newRoom.players, gameType: newRoom.gameType, phase: 'LOBBY'
                 });
-                console.log(`[★] Sala ${roomId} criada: ${selectedGame}`);
             });
 
-            // 4. ENTRAR NA SALA
+            // --- 4. ENTRAR NA SALA ---
             socket.on('join_room', async ({ roomId, nickname, userId }) => {
-                if (!roomId) return socket.emit('error_msg', 'ID inválido.');
                 const room = await RoomManager.getRoom(roomId);
-
                 if (room) {
-                    const existingIdx = room.players.findIndex(p => p.userId === userId);
-                    if (existingIdx !== -1) {
-                        room.players[existingIdx].socketId = socket.id;
-                        room.players[existingIdx].nickname = nickname;
-                        room.players[existingIdx].isOnline = true;
+                    const existing = room.players.find(p => p.userId === userId);
+                    if (existing) {
+                        existing.socketId = socket.id;
+                        existing.isOnline = true;
+                        existing.nickname = nickname;
                     } else {
-                        room.players.push({ 
-                            id: socket.id, socketId: socket.id, userId: userId || socket.id,
-                            nickname, isHost: false, score: 0, isOnline: true
+                        room.players.push({
+                            id: socket.id, socketId: socket.id, userId, nickname,
+                            isHost: false, score: 0, isOnline: true
                         });
                     }
-
-                    await RoomManager.saveRoom(room);
                     
-                    socket.join(room.id);
-                    socket.data.roomId = room.id;
+                    await RoomManager.saveRoom(room);
+                    socket.join(roomId);
+                    socket.data.roomId = roomId;
                     socket.data.userId = userId;
 
-                    // Envia dados personalizados
-                    let myData = room.state;
-                    const gameModule = GAME_MODULES[room.gameType];
-                    if (gameModule && typeof gameModule.getPublicData === 'function') {
-                        myData = gameModule.getPublicData(room.state, userId);
-                    }
+                    let gd = room.state;
+                    const mod = GAME_MODULES[room.gameType];
+                    if (mod && mod.getPublicData) gd = mod.getPublicData(room.state, userId);
 
                     socket.emit('joined_room', {
-                        roomId: room.id,
-                        players: room.players,
-                        gameType: room.gameType,
-                        phase: room.phase,
-                        gameData: myData || {}
+                        roomId, players: room.players, gameType: room.gameType,
+                        phase: room.phase, gameData: gd || {}
                     });
-
-                    // Avisa os outros (apenas atualização de lista de players)
-                    socket.to(room.id).emit('update_players', room.players);
-                    console.log(`[->] ${nickname} entrou na sala ${room.id}`);
+                    socket.to(roomId).emit('update_players', room.players);
                 } else {
                     socket.emit('error_msg', 'Sala não encontrada!');
                 }
             });
 
-            // 5. SELECIONAR JOGO (Lobby)
-            socket.on('select_game', async ({ gameId }) => {
-                const roomId = socket.data.roomId;
-                if (!roomId) return;
-                const room = await RoomManager.getRoom(roomId);
-                if (room && GAME_MODULES[gameId]) {
-                    room.gameType = gameId;
-                    room.state = {}; 
-                    room.phase = 'LOBBY';
-                    await RoomManager.saveRoom(room);
-
-                    io.to(room.id).emit('joined_room', {
-                        roomId: room.id, players: room.players, gameType: gameId, phase: 'LOBBY'
-                    });
-                }
-            });
-
-            // 6. INICIAR JOGO (Com Broadcast Personalizado)
+            // --- 5. INICIAR JOGO ---
+            // --- 5. INICIAR JOGO ---
             socket.on('start_game', async () => {
                 const roomId = socket.data.roomId;
                 if (!roomId) return;
                 const room = await RoomManager.getRoom(roomId);
                 if (!room) return;
-        
-                const gameModule = GAME_MODULES[room.gameType];
-                console.log(`[▶] Iniciando ${room.gameType} na sala ${roomId}`);
-        
-                if (gameModule && typeof gameModule.initGame === 'function') {
-                    try {
-                        const initData = gameModule.initGame(room, io); 
-                        room.phase = initData.phase || 'PLAYING';
-                        
-                        // Se o initGame retornou gameData, atualiza o state
-                        if(initData.gameData) room.state = initData.gameData;
 
+                const mod = GAME_MODULES[room.gameType];
+                if (mod && mod.initGame) {
+                    try {
+                        const init = mod.initGame(room, io);
+                        room.phase = init.phase || 'PLAYING';
+                        if (init.gameData) room.state = init.gameData;
                         await RoomManager.saveRoom(room);
-        
-                        // BROADCAST INTELIGENTE: Envia dados filtrados para cada jogador
+
                         const sockets = await io.in(roomId).fetchSockets();
                         for (const s of sockets) {
-                            let personalizedData = room.state;
-                            if (gameModule.getPublicData) {
-                                personalizedData = gameModule.getPublicData(room.state, s.data.userId);
-                            }
+                            let pData = room.state;
+                            
+                            // --- CORREÇÃO CRÍTICA AQUI ---
+                            // Sem isso, o server.js não sabe quem é o socket e manda myHand: []
+                            const player = room.players.find(p => p.socketId === s.id);
+                            const targetUserId = player ? player.userId : s.data.userId;
+                            // -----------------------------
+
+                            if (mod.getPublicData) pData = mod.getPublicData(room.state, targetUserId);
+                            
                             s.emit('joined_room', {
-                                roomId: room.id, players: room.players, gameType: room.gameType,
-                                phase: room.phase, gameData: personalizedData || {}
+                                roomId, players: room.players, gameType: room.gameType,
+                                phase: room.phase, gameData: pData || {}
                             });
                         }
-                    } catch (err) {
-                        console.error(`Erro init ${room.gameType}:`, err);
-                        socket.emit('error_msg', 'Erro ao iniciar jogo.');
+                    } catch (e) {
+                        console.error("Erro start_game:", e);
                     }
-                } else {
-                    // Fallback para jogos sem módulo
-                    room.phase = 'PLAYING';
-                    room.state = { status: 'started' };
-                    await RoomManager.saveRoom(room);
-                    io.to(roomId).emit('joined_room', {
-                        roomId: room.id, players: room.players, gameType: room.gameType,
-                        phase: room.phase, gameData: room.state
-                    });
                 }
             });
 
-            // 7. CHAT E SAÍDA
-            socket.on('send_message', (data) => io.to(data.roomId).emit('receive_message', data));
-            
-            socket.on('leave_room', async () => {
+            // --- 6. SAIR / DISCONNECT (CORREÇÃO DE LOOP) ---
+            const handleDisconnect = async (reason) => {
+                const userId = socket.data.userId;
                 const roomId = socket.data.roomId;
+
+                // 1. Remove da sessão global
+                if (userId && userSessions[userId] === socket.id) {
+                    delete userSessions[userId];
+                }
+
                 if (roomId) {
+                    // 2. FORÇA A SAÍDA DO CANAL SOCKET (CRÍTICO PARA EVITAR LOOP)
+                    socket.leave(roomId);
+                    
                     const room = await RoomManager.getRoom(roomId);
                     if (room) {
-                        socket.leave(roomId);
-                        room.players = room.players.filter(p => p.socketId !== socket.id);
-                        if (room.players.length === 0) {
-                            await RoomManager.deleteRoom(roomId);
-                            console.log(`[X] Sala ${roomId} vazia e removida.`);
-                        } else {
-                            const hasHost = room.players.some(p => p.isHost);
-                            if (!hasHost && room.players.length > 0) room.players[0].isHost = true;
+                        const player = room.players.find(p => p.userId === userId);
+                        if (player) {
+                            player.isOnline = false;
+                            
+                            // Passar a coroa se o host sair
+                            if (player.isHost) {
+                                const nextHost = room.players.find(p => p.isOnline && p.userId !== player.userId);
+                                if (nextHost) {
+                                    player.isHost = false;
+                                    nextHost.isHost = true;
+                                }
+                            }
+
                             await RoomManager.saveRoom(room);
                             io.to(roomId).emit('update_players', room.players);
+                            
+                            // Se for MegaQuiz, checa se precisa finalizar rodada
+                            if (room.gameType === 'MEGAQUIZ') {
+                                const mod = GAME_MODULES['MEGAQUIZ'];
+                                if (mod && mod.checkAnswers) mod.checkAnswers(io, room);
+                            }
                         }
                     }
-                    socket.data.roomId = null;
                 }
-            });
+            };
 
-            socket.on('disconnect', async () => { 
-                // A reconexão é tratada no 'rejoin_room', aqui apenas logs opcionais
-            });
+            socket.on('leave_room', () => handleDisconnect('user_left'));
+            socket.on('disconnect', () => handleDisconnect('connection_lost'));
+        });
+
+        // Rota Catch-All
+        app.get(/.*/, (req, res) => {
+            res.sendFile(path.join(buildPath, 'index.html'));
         });
 
         const PORT = process.env.PORT || 3001;
         server.listen(PORT, '0.0.0.0', () => {
-            console.log(`🔥 Servidor rodando na porta ${PORT} (Redis Mode + React Static)`);
+            console.log(`🔥 Servidor rodando na porta ${PORT}`);
         });
 
     } catch (error) {
-        console.error("❌ Falha fatal:", error);
-        process.exit(1);
+        console.error("Falha fatal:", error);
     }
 })();

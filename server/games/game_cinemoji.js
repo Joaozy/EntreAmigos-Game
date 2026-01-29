@@ -2,10 +2,9 @@ const { shuffle, normalize } = require('../utils/helpers');
 const RoomManager = require('../managers/RoomManager');
 
 // --- GERENCIADOR DE TIMERS (MEMÓRIA RAM) ---
-// O Redis guarda dados, mas o relógio precisa viver no processo Node.js
 const activeTimers = {}; // { roomId: intervalId }
 
-// --- TEMAS (COM FALLBACK) ---
+// --- 1. CARREGAMENTO DE TEMAS ---
 let THEMES = [
     { emojis: "🦁👑", answers: ["O Rei Leão", "Rei Leao"] },
     { emojis: "🚢🧊💔", answers: ["Titanic"] },
@@ -13,10 +12,14 @@ let THEMES = [
 ];
 
 try {
+    // Tenta carregar do arquivo JSON que criamos
     const loaded = require('../data/themes_cinemoji.json');
-    if (Array.isArray(loaded) && loaded.length > 0) THEMES = loaded;
+    if (Array.isArray(loaded) && loaded.length > 0) {
+        THEMES = loaded;
+        console.log(`[CINEMOJI] Carregados ${THEMES.length} filmes.`);
+    }
 } catch (e) {
-    console.log("[CINEMOJI] Usando temas padrão.");
+    console.log("[CINEMOJI] Usando temas padrão (JSON não encontrado).");
 }
 
 // --- FUNÇÕES AUXILIARES ---
@@ -55,6 +58,9 @@ module.exports = (io, socket, RoomManager) => {
             const gd = room.state;
             if (!guess || typeof guess !== 'string') return;
 
+            // Proteção: Se answers não existir (bug anterior), evita crash
+            if (!gd.currentTheme || !gd.currentTheme.answers) return;
+
             const userGuessNorm = normalize(guess);
             const validAnswers = gd.currentTheme.answers.map(a => normalize(a));
             const player = room.players.find(p => p.socketId === socket.id);
@@ -77,7 +83,7 @@ module.exports = (io, socket, RoomManager) => {
                     io.to(roomId).emit('update_players', room.players);
                     
                     // Atualiza dados (incluindo vencedores)
-                    io.to(roomId).emit('update_game_data', { gameData: getPublicData(room.state), phase: 'GUESSING' });
+                    await broadcastUpdate(io, room);
 
                     // Se todos acertaram (quem está online)
                     const activePlayers = room.players.filter(p => p.isOnline !== false);
@@ -122,7 +128,7 @@ async function endRound(io, roomId) {
     await RoomManager.saveRoom(room);
 
     // Revela resposta
-    io.to(roomId).emit('update_game_data', { gameData: getPublicData(gd), phase: 'REVEAL' });
+    await broadcastUpdate(io, room);
     
     // Espera 5s e começa próxima
     setTimeout(async () => {
@@ -135,45 +141,48 @@ async function endRound(io, roomId) {
         if (nextState.phase === 'GAME_OVER') {
              const winner = currentRoom.players.sort((a,b) => b.score - a.score)[0];
              io.to(roomId).emit('game_over', { winner, results: currentRoom.players });
-             // Limpa dados da sala se quiser
-             // RoomManager.deleteRoom(roomId);
         } else {
-             io.to(roomId).emit('joined_room', {
-                 roomId: currentRoom.id,
-                 players: currentRoom.players,
-                 gameType: 'CINEMOJI',
-                 phase: 'GUESSING',
-                 gameData: nextState.gameData
-             });
+             // Reutiliza o broadcastUpdate para garantir consistência
+             await broadcastUpdate(io, currentRoom);
         }
     }, 5000);
 }
 
 // Chamado pelo server.js (start_game) e internamente (next round)
 module.exports.initGame = (room, io) => {
-    // Setup inicial
-    if(!room.state || !room.state.deck) {
+    // Setup inicial (Cria o DECK se não existir)
+    if(!room.state || !room.state.deck || room.state.deck.length === 0) {
+        // Se for reinício ou primeira vez, garante deck cheio
         room.state = {
             deck: shuffle([...THEMES]),
             currentTheme: null,
             round: 0,
             winners: [],
-            hintRevealed: false
+            hintRevealed: false,
+            phase: 'GUESSING',
+            hint: ''
         };
-        room.players.forEach(p => p.score = 0);
+        // Zera pontuação apenas se for rodada 0 (início real)
+        if (room.state.round === 0) {
+            room.players.forEach(p => p.score = 0);
+        }
     }
 
     const gd = room.state;
     
     // Verifica Fim de Jogo
-    if (gd.deck.length === 0) return { phase: 'GAME_OVER' };
+    if (gd.deck.length === 0) {
+        gd.phase = 'GAME_OVER';
+        return { phase: 'GAME_OVER' };
+    }
 
     // Nova Rodada
-    gd.round++;
+    gd.round = (gd.round || 0) + 1;
     gd.currentTheme = gd.deck.pop();
     gd.phase = 'GUESSING';
     gd.winners = [];
     gd.hintRevealed = false;
+    // Gera dica baseada na primeira resposta possível
     gd.hint = generateHint(gd.currentTheme.answers[0]);
 
     // Inicia Timer se tiver IO
@@ -181,10 +190,9 @@ module.exports.initGame = (room, io) => {
         startRoundLoop(io, room.id);
     }
 
-    return { 
-        phase: 'GUESSING', 
-        gameData: getPublicData(room.state) 
-    };
+    // --- CORREÇÃO CRÍTICA ---
+    // Retorna apenas a fase para o server.js não sobrescrever nosso state rico
+    return { phase: 'GUESSING' };
 };
 
 function startRoundLoop(io, roomId) {
@@ -194,8 +202,7 @@ function startRoundLoop(io, roomId) {
     }
 
     let timeLeft = 60;
-    console.log(`[CINEMOJI] Timer iniciado para sala ${roomId} (${timeLeft}s)`);
-
+    
     // 2. Cria novo Timer
     const timerId = setInterval(async () => {
         timeLeft--;
@@ -210,7 +217,6 @@ function startRoundLoop(io, roomId) {
                 room.state.hintRevealed = true;
                 await RoomManager.saveRoom(room);
                 io.to(roomId).emit('cinemoji_hint', room.state.hint);
-                console.log(`[CINEMOJI] Dica revelada sala ${roomId}`);
             }
         }
 
@@ -228,13 +234,28 @@ function startRoundLoop(io, roomId) {
 
 function getPublicData(gd) {
     if (!gd || !gd.currentTheme) return {};
+    
     return {
         emojis: gd.currentTheme.emojis,
+        // Só manda o título na fase de revelação (REVEAL)
         title: gd.phase === 'REVEAL' ? gd.currentTheme.answers[0] : null, 
         hint: gd.hintRevealed ? gd.hint : null,
         round: gd.round,
-        winners: gd.winners
+        winners: gd.winners || []
     };
+}
+
+async function broadcastUpdate(io, room) {
+    const sockets = await io.in(room.id).fetchSockets();
+    for(const s of sockets) {
+        s.emit('joined_room', {
+            roomId: room.id,
+            players: room.players,
+            gameType: 'CINEMOJI',
+            phase: room.state.phase,
+            gameData: getPublicData(room.state)
+        });
+    }
 }
 
 module.exports.getPublicData = getPublicData;

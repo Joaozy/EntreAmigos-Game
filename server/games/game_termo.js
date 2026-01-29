@@ -1,199 +1,140 @@
-const { normalize } = require('../utils/helpers');
+const { normalize } = require('../utils/helpers'); // Certifique-se de ter essa função
 const RoomManager = require('../managers/RoomManager');
 
-let WORDS = ["AMIGO", "TERMO", "JOGOS", "FESTA", "NOITE", "LIVRO", "MUNDO", "CARTA", "PODER", "AUDIO", "VIDEO"];
+// 1. LISTA DE PALAVRAS (5 Letras)
+let WORDS = [
+    "FESTA", "TERMO", "NOITE", "MUNDO", "VIGOR", "SENHA", "LETRA", "PIANO", "LINDA", "TESTE"
+];
+
 try {
+    // Tenta carregar lista externa
     const loaded = require('../data/words_termo.json');
     if (Array.isArray(loaded) && loaded.length > 0) WORDS = loaded;
-} catch (e) {}
+} catch (e) {
+    console.log("[TERMO] Usando lista padrão.");
+}
 
-const MAX_ATTEMPTS = 6;
-const MAX_ROUNDS = 5;
+// Helper: Normaliza para comparar (remove acentos)
+const norm = (str) => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
 
 module.exports = (io, socket, RoomManager) => {
 
-    // 1. CHUTE
-    socket.on('termo_guess', async ({ roomId, guess }) => {
+    const getUserId = (room) => {
+        const player = room.players.find(p => p.socketId === socket.id);
+        return player ? player.userId : socket.data.userId;
+    };
+
+    // 1. RECEBER TENTATIVA
+    socket.on('termo_guess', async ({ roomId, word }) => {
         try {
             const room = await RoomManager.getRoom(roomId);
-            if (!room || !room.state || !room.state.playersState) return;
-
-            const userId = socket.data.userId;
+            if (!room || room.state.phase !== 'PLAYING') return;
             
-            // Auto-Healing: Cria estado se não existir
-            if (!room.state.playersState[userId]) {
-                room.state.playersState[userId] = { attempts: [], finished: false, won: false };
-            }
+            // Apenas o jogador da vez (Host ou Coop? Termo geralmente é coop ou individual)
+            // Aqui vamos assumir COOPERATIVO: Qualquer um pode chutar, todos veem o mesmo board
             
-            const playerState = room.state.playersState[userId];
-            if (playerState.finished) return;
+            const guess = norm(word);
+            if (guess.length !== 5) return;
 
-            if (!guess || guess.length !== 5) return socket.emit('error_msg', 'A palavra deve ter 5 letras.');
-
-            const word = normalize(guess).toUpperCase();
-            const solution = room.state.solution;
-            const result = checkWord(word, solution);
-
-            playerState.attempts.push({ word, result });
+            const secret = norm(room.state.secretWord);
+            const secretArr = secret.split('');
+            const guessArr = guess.split('');
             
-            if (word === solution) {
-                playerState.finished = true;
-                playerState.won = true;
-                // Pontuação: 6 pts na 1ª tentativa, 1 pt na última
-                const points = (MAX_ATTEMPTS - playerState.attempts.length) + 1;
-                
-                const player = room.players.find(p => p.userId === userId);
-                if(player) player.score = (player.score || 0) + points;
-                
-                socket.emit('termo_success', 'Parabéns! Você acertou.');
-            } else if (playerState.attempts.length >= MAX_ATTEMPTS) {
-                playerState.finished = true;
-                socket.emit('termo_fail', `A palavra era: ${solution}`);
+            // Lógica do Termo (Verde, Amarelo, Cinza)
+            const result = Array(5).fill('WRONG'); // Começa tudo cinza
+            const secretPool = [...secretArr]; // Cópia para controlar os amarelos
+
+            // 1º Passada: Verdes (Posição Exata)
+            guessArr.forEach((letter, i) => {
+                if (letter === secretArr[i]) {
+                    result[i] = 'CORRECT';
+                    secretPool[i] = null; // Remove do pool para não contar amarelo duplicado
+                }
+            });
+
+            // 2º Passada: Amarelos (Posição Errada)
+            guessArr.forEach((letter, i) => {
+                if (result[i] !== 'CORRECT') {
+                    const foundIndex = secretPool.indexOf(letter);
+                    if (foundIndex !== -1) {
+                        result[i] = 'ALMOST';
+                        secretPool[foundIndex] = null;
+                    }
+                }
+            });
+
+            // Adiciona ao histórico
+            room.state.board.push({
+                word: word.toUpperCase(),
+                result: result,
+                player: room.players.find(p => p.socketId === socket.id)?.nickname || '???'
+            });
+
+            room.state.currentRow++;
+
+            // Verifica Vitória ou Derrota
+            if (guess === secret) {
+                room.state.phase = 'VICTORY';
+            } else if (room.state.currentRow >= 6) {
+                room.state.phase = 'GAME_OVER';
             }
 
             await RoomManager.saveRoom(room);
+            await broadcastUpdate(io, room);
 
-            // Atualiza apenas este jogador com dados sensíveis
-            socket.emit('update_game_data', { gameData: getPublicData(room.state, userId) });
-            // Atualiza placar para todos
-            io.to(roomId).emit('update_players', room.players);
-
-        } catch (err) {
-            console.error('[TERMO] Erro guess:', err);
-        }
+        } catch(e) { console.error(e); }
     });
 
-    // 2. PRÓXIMA RODADA (Mantém pontos)
-    socket.on('termo_next_round', async ({ roomId }) => {
-        const room = await RoomManager.getRoom(roomId);
-        if(!room) return;
-
-        const player = room.players.find(p => p.socketId === socket.id);
-        if (player && player.isHost) {
-            
-            if (room.state.round < MAX_ROUNDS) {
-                // AVANÇA ROUND
-                room.state.round++;
-                const newWord = WORDS[Math.floor(Math.random() * WORDS.length)];
-                room.state.solution = normalize(newWord).toUpperCase();
-                
-                // Reseta tentativas, mas MANTÉM score
-                Object.keys(room.state.playersState).forEach(uid => {
-                    room.state.playersState[uid] = { attempts: [], finished: false, won: false };
-                });
-
-                room.phase = 'PLAYING';
-                await RoomManager.saveRoom(room);
-                broadcastGameUpdate(io, room);
-
-            } else {
-                // FIM DE JOGO (Acabou os 5 rounds)
-                room.phase = 'GAME_OVER';
-                await RoomManager.saveRoom(room);
-                io.to(roomId).emit('game_over', { 
-                    phase: 'GAME_OVER',
-                    results: room.players 
-                });
-            }
-        }
-    });
-
-    // 3. REINICIAR JOGO (Zera pontos e volta pro Round 1)
+    // 2. REINICIAR
     socket.on('termo_restart', async ({ roomId }) => {
         const room = await RoomManager.getRoom(roomId);
-        if(!room) return;
-
-        const player = room.players.find(p => p.socketId === socket.id);
-        if (player && player.isHost) {
-            // Reinicia Scores Globais
-            room.players.forEach(p => p.score = 0);
-            
-            // Reinicia Estado do Jogo
-            module.exports.initGame(room); 
-            
+        if (room) {
+            module.exports.initGame(room);
             await RoomManager.saveRoom(room);
-            broadcastGameUpdate(io, room);
+            await broadcastUpdate(io, room);
         }
     });
 };
 
-// Helper para enviar dados customizados a todos
-async function broadcastGameUpdate(io, room) {
+// --- INIT ---
+module.exports.initGame = (room) => {
+    // Sorteia palavra NOVA a cada init
+    const randomWord = WORDS[Math.floor(Math.random() * WORDS.length)];
+    
+    room.state = {
+        secretWord: randomWord,
+        board: [], // Lista de tentativas
+        currentRow: 0,
+        phase: 'PLAYING'
+    };
+
+    console.log(`[TERMO] Iniciado. Palavra: ${randomWord}`);
+    return { phase: 'PLAYING' };
+};
+
+function getPublicData(gd) {
+    if (!gd) return {};
+    
+    return {
+        board: gd.board,
+        currentRow: gd.currentRow,
+        phase: gd.phase,
+        // Só manda a palavra secreta se acabou
+        secretWord: (gd.phase === 'VICTORY' || gd.phase === 'GAME_OVER') ? gd.secretWord : null
+    };
+}
+
+async function broadcastUpdate(io, room) {
     const sockets = await io.in(room.id).fetchSockets();
     for(const s of sockets) {
         s.emit('joined_room', {
             roomId: room.id,
             players: room.players,
             gameType: 'TERMO',
-            phase: room.phase,
-            gameData: getPublicData(room.state, s.data.userId)
+            phase: room.state.phase,
+            gameData: getPublicData(room.state)
         });
     }
-}
-
-function checkWord(guess, solution) {
-    const res = Array(5).fill('gray');
-    const solutionArr = solution.split('');
-    const guessArr = guess.split('');
-
-    // Verdes
-    guessArr.forEach((letter, i) => {
-        if (letter === solutionArr[i]) {
-            res[i] = 'green';
-            solutionArr[i] = null;
-            guessArr[i] = null;
-        }
-    });
-
-    // Amarelos
-    guessArr.forEach((letter, i) => {
-        if (letter && solutionArr.includes(letter)) {
-            res[i] = 'yellow';
-            const idx = solutionArr.indexOf(letter);
-            solutionArr[idx] = null;
-        }
-    });
-    return res;
-}
-
-module.exports.initGame = (room, io) => {
-    const randomWord = WORDS[Math.floor(Math.random() * WORDS.length)];
-    
-    room.state = {
-        solution: normalize(randomWord).toUpperCase(),
-        round: 1,
-        maxRounds: MAX_ROUNDS,
-        playersState: {}
-    };
-
-    room.players.forEach(p => {
-        if (p.userId) {
-            room.state.playersState[p.userId] = {
-                attempts: [], finished: false, won: false
-            };
-        }
-    });
-
-    // Se estiver reiniciando, reseta pontos globais também
-    // (Opcional: initGame é chamado no start_game e termo_restart)
-    
-    return { phase: 'PLAYING', gameData: {} };
-};
-
-function getPublicData(gd, userId) {
-    if (!gd || !gd.playersState || !userId) return {};
-    
-    const playerSt = gd.playersState[userId];
-    if (!playerSt) return { attempts: [], finished: false, won: false, round: gd.round, maxRounds: gd.maxRounds };
-
-    return {
-        attempts: playerSt.attempts,
-        finished: playerSt.finished,
-        won: playerSt.won,
-        solution: playerSt.finished ? gd.solution : null,
-        round: gd.round,
-        maxRounds: gd.maxRounds
-    };
 }
 
 module.exports.getPublicData = getPublicData;
