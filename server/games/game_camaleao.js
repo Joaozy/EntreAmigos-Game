@@ -130,7 +130,7 @@ module.exports.initGame = (room) => {
     }
 
     room.phase = 'ANSWERING';
-    return { phase: 'ANSWERING', gameData: getPublicData(room.state) };
+    return { phase: 'ANSWERING' };
 };
 
 async function calculateResult(io, room, roomId, RoomManager) {
