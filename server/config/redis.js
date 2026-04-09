@@ -2,31 +2,43 @@
 require('dotenv').config();
 const { createClient } = require("redis");
 
-// Cria os clientes (Pub e Sub são necessários para o Socket.io, mas para dados usaremos o 'client' principal)
-const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
+const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 
-const client = createClient({ url: redisUrl });
+// 1. CONFIGURAÇÃO CIRÚRGICA: Suporte para Redis externo (Render/Upstash) com TLS
+const clientOptions = { url: redisUrl };
+if (redisUrl.startsWith('rediss://')) {
+    clientOptions.socket = {
+        tls: true,
+        rejectUnauthorized: false
+    };
+}
+
+const client = createClient(clientOptions);
 const pubClient = client.duplicate();
 const subClient = client.duplicate();
 
 // Listeners de erro
-client.on('error', err => console.error('[Redis Client] Error:', err));
-pubClient.on('error', err => console.error('[Redis Pub] Error:', err));
-subClient.on('error', err => console.error('[Redis Sub] Error:', err));
+client.on('error', err => console.error('[Redis Client] Error:', err.message));
+pubClient.on('error', err => console.error('[Redis Pub] Error:', err.message));
+subClient.on('error', err => console.error('[Redis Sub] Error:', err.message));
 
 // Função única para conectar tudo
 async function connectRedis() {
-    await Promise.all([
-        client.connect(),
-        pubClient.connect(),
-        subClient.connect()
-    ]);
-    console.log(`✅ [Redis] Conectado a ${redisUrl}`);
+    try {
+        await Promise.all([
+            client.connect(),
+            pubClient.connect(),
+            subClient.connect()
+        ]);
+        console.log(`✅ [Redis] Conectado a ${redisUrl}`);
+    } catch (error) {
+        console.error(`❌ [Redis] Falha ao conectar:`, error.message);
+    }
 }
 
 module.exports = {
     connectRedis,
-    client,      // Usaremos para GET/SET de dados
-    pubClient,   // Usaremos para o Adapter do Socket
-    subClient    // Usaremos para o Adapter do Socket
+    client,      
+    pubClient,   
+    subClient    
 };

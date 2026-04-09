@@ -113,10 +113,17 @@ const userSessions = {};
                     }
 
                     // Envia dados
-                    let gd = room.state;
-                    const mod = GAME_MODULES[room.gameType];
-                    if (mod && mod.getPublicData) gd = mod.getPublicData(room.state, userId);
-
+                    let gd = room.state || {};
+                    if (room.phase !== 'LOBBY') {
+                        const mod = GAME_MODULES[room.gameType];
+                        if (mod && mod.getPublicData) {
+                            try {
+                                gd = mod.getPublicData(room.state, userId);
+                            } catch (e) {
+                                console.error("[JOIN] Erro ao formatar dados:", e.message);
+                            }
+                        }
+                    }
                     socket.emit('joined_room', {
                         roomId,
                         players: room.players,
@@ -176,9 +183,17 @@ const userSessions = {};
                     socket.data.roomId = roomId;
                     socket.data.userId = userId;
 
-                    let gd = room.state;
-                    const mod = GAME_MODULES[room.gameType];
-                    if (mod && mod.getPublicData) gd = mod.getPublicData(room.state, userId);
+                    let gd = room.state || {};
+                    if (room.phase !== 'LOBBY') {
+                        const mod = GAME_MODULES[room.gameType];
+                        if (mod && mod.getPublicData) {
+                            try {
+                                gd = mod.getPublicData(room.state, userId);
+                            } catch (e) {
+                                console.error("[JOIN] Erro ao formatar dados:", e.message);
+                            }
+                        }
+                    }
 
                     socket.emit('joined_room', {
                         roomId, players: room.players, gameType: room.gameType,
