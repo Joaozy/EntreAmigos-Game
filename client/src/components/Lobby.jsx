@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { LogOut, Users, Play, Hash, Gamepad2, Brain, Search, Eye, MessageSquare, ListOrdered, Film, Coffee, XCircle, HelpCircle } from 'lucide-react';
+import { LogOut, Users, Play, Hash, Gamepad2, Brain, Search, Eye, MessageSquare, ListOrdered, Film, Coffee, XCircle, HelpCircle, VenetianMask } from 'lucide-react';
 
 const GAMES = [
     { id: 'TERMO', name: 'Termo', icon: <ListOrdered size={32} className="text-green-400"/>, desc: 'Descubra a palavra secreta.', color: 'from-green-900/50 to-emerald-900/50 border-green-500/30' },
@@ -13,6 +13,7 @@ const GAMES = [
     { id: 'SPY', name: 'O Espião', icon: <Eye size={32} className="text-emerald-400"/>, desc: 'Descubra o intruso.', color: 'from-emerald-900/50 to-green-900/50 border-emerald-500/30' },
     { id: 'ENIGMA', name: 'Enigma', icon: <Brain size={32} className="text-cyan-400"/>, desc: 'Charadas estilo Perfil.', color: 'from-cyan-900/50 to-blue-900/50 border-cyan-500/30' },
     { id: 'ITO', name: 'Ito', icon: <ListOrdered size={32} className="text-indigo-400"/>, desc: 'Cooperativo de números.', color: 'from-indigo-900/50 to-purple-900/50 border-indigo-500/30' },
+    { id: 'CAMALEAO', name: 'Camaleão', icon: <VenetianMask size={32} className="text-lime-400"/>, desc: 'Perguntas duplas, um intruso.', color: 'from-lime-900/50 to-green-900/50 border-lime-500/30' },
 ];
 
 export default function Lobby({ nickname, onCreate, onJoin, onLogout }) {
