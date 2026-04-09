@@ -5,7 +5,8 @@ module.exports = {
     CHA_CAFE: 'CHA_CAFE',
     CODENAMES: 'CODENAMES',
     STOP: 'STOP',
-    TERMO: 'TERMO'
+    TERMO: 'TERMO',
+    CAMALEAO: 'CAMALEAO'
   },
   // Fases do Jogo
   PHASES: {

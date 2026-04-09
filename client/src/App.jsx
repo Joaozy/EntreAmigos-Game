@@ -18,6 +18,7 @@ import GameChaCafe from './GameChaCafe';
 import GameSpy from './GameSpy';
 import GameEnigma from './GameEnigma';
 import GameTable from './GameTable'; // ITO
+import GameCamaleao from './GameCamaleao';
 
 export default function App() {
     const { 
@@ -93,6 +94,7 @@ export default function App() {
         case 'ENIGMA':      return <GameEnigma />;
         case 'ITO':         return <GameTable />; 
         case 'TABLE':       return <GameTable />;
+        case 'CAMALEAO':    return <GameCamaleao />;
         
         default:
             return (

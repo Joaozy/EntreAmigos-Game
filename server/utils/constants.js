@@ -11,7 +11,8 @@ module.exports = {
     CINEMOJI: 'CINEMOJI',
     DIXIT: 'DIXIT',
     SPY: 'SPY',
-    ENIGMA: 'ENIGMA'
+    ENIGMA: 'ENIGMA',
+    CAMALEAO: 'CAMALEAO'
   },
   // Fases do Jogo
   PHASES: {

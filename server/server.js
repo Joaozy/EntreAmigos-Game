@@ -21,7 +21,8 @@ const GAME_MODULES = {
     'SPY': require('./games/game_spy'),
     'ENIGMA': require('./games/game_enigma'),
     'ITO': require('./games/game_ito'),
-    'TABLE': require('./games/game_table') 
+    'TABLE': require('./games/game_table'),
+    'CAMALEAO': require('./games/game_camaleao') 
 };
 
 const app = express();
