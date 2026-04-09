@@ -218,7 +218,9 @@ const userSessions = {};
                     try {
                         const init = mod.initGame(room, io);
                         room.phase = init.phase || 'PLAYING';
-                        if (init.gameData) room.state = init.gameData;
+                        
+                        // REMOVIDO: if (init.gameData) room.state = init.gameData; 
+                        
                         await RoomManager.saveRoom(room);
 
                         const sockets = await io.in(roomId).fetchSockets();

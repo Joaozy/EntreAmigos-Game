@@ -34,10 +34,29 @@ export default function GameCamaleao({ players, isHost, roomId, gameData, phase 
         socket.emit('camaleao_vote', { targetId });
     };
 
-    if (!gameData) {
+    if (!gameData || !gameData.round) {
         return (
-            <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">
-                <Loader2 className="animate-spin mr-2" /> A preparar a mesa...
+            <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white relative">
+                {/* BOTÕES DE EMERGÊNCIA */}
+                <div className="fixed top-4 right-4 z-50 flex gap-2">
+                    {isHost && (
+                        <button 
+                            onClick={() => socket.emit('return_to_lobby', { roomId })}
+                            className="bg-slate-800/80 backdrop-blur p-2 rounded-full hover:bg-slate-700 border border-slate-600 shadow-lg"
+                        >
+                            <Home size={20} />
+                        </button>
+                    )}
+                    <button 
+                        onClick={sairDoJogo} 
+                        className="bg-red-900/80 backdrop-blur p-2 rounded-full hover:bg-red-800 border border-red-700 shadow-lg"
+                    >
+                        <LogOut size={20} />
+                    </button>
+                </div>
+
+                <Loader2 className="animate-spin mb-4 text-emerald-500" size={40} />
+                <p className="font-bold text-lg text-slate-300">A preparar a mesa...</p>
             </div>
         );
     }
