@@ -1,11 +1,10 @@
-import React, { useState } from 'react'; // <--- ADICIONADO: useState
+import React from 'react';
 import { useGame } from './context/GameContext';
 
 // Telas Gerais
 import Login from './components/Login';
-import Lobby from './components/Lobby';
+import Lobby from './components/Lobby'; 
 import WaitingRoom from './components/WaitingRoom';
-import Profile from './components/Profile'; // <--- ADICIONADO: Import da tela de Perfil
 
 // Jogos
 import GameTermo from './GameTermo';
@@ -20,12 +19,12 @@ import GameSpy from './GameSpy';
 import GameEnigma from './GameEnigma';
 import GameTable from './GameTable'; // ITO
 import GameCamaleao from './GameCamaleao';
+import GameQualEANota from './GameQualEANota'; // <--- ADICIONADO AQUI
 
 export default function App() {
     const { 
         user, 
         nickname,
-        avatarUrl,     // <--- ADICIONADO: Pegando a foto do contexto
         currentPhase, 
         gameType, 
         roomId, 
@@ -36,9 +35,6 @@ export default function App() {
         sairDoJogo,
         deslogar 
     } = useGame();
-
-    // <--- ADICIONADO: Estado para controlar se a tela de Perfil está aberta
-    const [showProfile, setShowProfile] = useState(false); 
 
     // 1. CARREGAMENTO
     if (isLoading) {
@@ -68,22 +64,14 @@ export default function App() {
         return <Login />;
     }
 
-    // --- NOVA TELA: PERFIL ---
-    // Se o usuário clicar em "Perfil", mostra esta tela em vez do Lobby
-    if (showProfile) {
-        return <Profile onClose={() => setShowProfile(false)} />;
-    }
-
     // 4. LOBBY (Sem Sala)
     if (!roomId) {
         return (
             <Lobby 
                 nickname={nickname} 
-                avatarUrl={avatarUrl} // <--- Passando a foto para o Lobby
                 onCreate={criarSala} 
                 onJoin={entrarSala} 
                 onLogout={deslogar} 
-                onOpenProfile={() => setShowProfile(true)} // <--- Função para abrir o Perfil
             />
         );
     }
@@ -108,6 +96,7 @@ export default function App() {
         case 'ITO':         return <GameTable />; 
         case 'TABLE':       return <GameTable />;
         case 'CAMALEAO':    return <GameCamaleao />;
+        case 'QUALEANOTA':  return <GameQualEANota />; // <--- ADICIONADO AQUI
         
         default:
             return (
