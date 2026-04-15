@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { LogOut, Users, Play, Hash, Gamepad2, Brain, Search, Eye, MessageSquare, ListOrdered, Film, Coffee, XCircle, HelpCircle, VenetianMask } from 'lucide-react';
+import { LogOut, Users, Play, Hash, Gamepad2, Brain, Search, Eye, MessageSquare, ListOrdered, Film, Coffee, XCircle, HelpCircle, VenetianMask, User } from 'lucide-react';
 
 const GAMES = [
     { id: 'TERMO', name: 'Termo', icon: <ListOrdered size={32} className="text-green-400"/>, desc: 'Descubra a palavra secreta.', color: 'from-green-900/50 to-emerald-900/50 border-green-500/30' },
@@ -16,7 +16,7 @@ const GAMES = [
     { id: 'CAMALEAO', name: 'Camaleão', icon: <VenetianMask size={32} className="text-lime-400"/>, desc: 'Perguntas duplas, um intruso.', color: 'from-lime-900/50 to-green-900/50 border-lime-500/30' },
 ];
 
-export default function Lobby({ nickname, onCreate, onJoin, onLogout }) {
+export default function Lobby({ nickname, avatarUrl, onCreate, onJoin, onLogout, onOpenProfile }) {
     const [roomIdInput, setRoomIdInput] = useState('');
     const [selectedGame, setSelectedGame] = useState(null);
 
@@ -33,18 +33,26 @@ export default function Lobby({ nickname, onCreate, onJoin, onLogout }) {
                         <h1 className="text-xl font-black tracking-tight text-white leading-none">EntreAmigos</h1>
                         <p className="text-xs text-slate-400 font-bold uppercase mt-1 flex items-center gap-1">
                             <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-                            {nickname || 'Visitante'}
+                            Olá, {nickname || 'Visitante'}
                         </p>
                     </div>
                 </div>
-                
-                <button 
-                    onClick={onLogout} 
-                    className="flex items-center gap-2 bg-slate-800 hover:bg-red-900/80 hover:text-white text-slate-400 px-4 py-2 rounded-xl transition border border-slate-700 hover:border-red-500 group"
-                >
-                    <LogOut size={18} className="group-hover:-translate-x-1 transition-transform"/>
-                    <span className="hidden md:inline font-bold text-sm">SAIR</span>
-                </button>
+        
+                <div className="flex gap-2">
+                    <button onClick={onOpenProfile} className="flex items-center gap-2 bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white px-4 py-2 rounded-xl transition border border-indigo-500/30">
+                        {avatarUrl ? (
+                            <img src={avatarUrl} alt="Avatar" className="w-6 h-6 rounded-full object-cover" />
+                        ) : (
+                            <User size={18} />
+                        )}
+                        <span className="hidden md:inline font-bold text-sm">PERFIL</span>
+                    </button>
+
+                    <button onClick={onLogout} className="flex items-center gap-2 bg-slate-800 hover:bg-red-900/80 hover:text-white text-slate-400 px-4 py-2 rounded-xl transition border border-slate-700 hover:border-red-500 group">
+                        <LogOut size={18} className="group-hover:-translate-x-1 transition-transform"/>
+                        <span className="hidden md:inline font-bold text-sm">SAIR</span>
+                    </button>
+                </div>
             </div>
 
             <div className="max-w-7xl mx-auto flex flex-col lg:flex-row gap-8 items-start">

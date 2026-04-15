@@ -1,10 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react'; // <--- ADICIONADO: useState
 import { useGame } from './context/GameContext';
 
 // Telas Gerais
 import Login from './components/Login';
-import Lobby from './components/Lobby'; // <--- IMPORTANTE: Certifique-se que o Lobby.jsx abaixo esteja salvo aqui
+import Lobby from './components/Lobby';
 import WaitingRoom from './components/WaitingRoom';
+import Profile from './components/Profile'; // <--- ADICIONADO: Import da tela de Perfil
 
 // Jogos
 import GameTermo from './GameTermo';
@@ -24,6 +25,7 @@ export default function App() {
     const { 
         user, 
         nickname,
+        avatarUrl,     // <--- ADICIONADO: Pegando a foto do contexto
         currentPhase, 
         gameType, 
         roomId, 
@@ -32,8 +34,11 @@ export default function App() {
         criarSala,
         entrarSala,
         sairDoJogo,
-        deslogar // <--- PEGANDO A NOVA FUNÇÃO
+        deslogar 
     } = useGame();
+
+    // <--- ADICIONADO: Estado para controlar se a tela de Perfil está aberta
+    const [showProfile, setShowProfile] = useState(false); 
 
     // 1. CARREGAMENTO
     if (isLoading) {
@@ -63,14 +68,22 @@ export default function App() {
         return <Login />;
     }
 
+    // --- NOVA TELA: PERFIL ---
+    // Se o usuário clicar em "Perfil", mostra esta tela em vez do Lobby
+    if (showProfile) {
+        return <Profile onClose={() => setShowProfile(false)} />;
+    }
+
     // 4. LOBBY (Sem Sala)
     if (!roomId) {
         return (
             <Lobby 
                 nickname={nickname} 
+                avatarUrl={avatarUrl} // <--- Passando a foto para o Lobby
                 onCreate={criarSala} 
                 onJoin={entrarSala} 
-                onLogout={deslogar} // <--- AQUI A CORREÇÃO: Passamos deslogar
+                onLogout={deslogar} 
+                onOpenProfile={() => setShowProfile(true)} // <--- Função para abrir o Perfil
             />
         );
     }
