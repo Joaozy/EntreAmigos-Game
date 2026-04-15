@@ -1,17 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { useGame } from './context/GameContext';
-import { socket } from './socket';
 import { Home, LogOut, Loader2, Send, MessageCircle, Eye, Users, Trophy, ArrowRight } from 'lucide-react';
 
-export default function GameCamaleao({ players, isHost, roomId, gameData, phase }) {
-    const { sairDoJogo } = useGame();
+// CORREÇÃO 1: Removemos as props e vamos buscar tudo no useGame()
+export default function GameCamaleao() {
+    const { socket, user, players, isHost, roomId, gameData, currentPhase: phase, sairDoJogo } = useGame();
+    
     const [secretQuestion, setSecretQuestion] = useState('A carregar a sua pergunta...');
     const [isChameleonResult, setIsChameleonResult] = useState(null);
     const [myAnswer, setMyAnswer] = useState('');
 
     // Sincronização Segura de Estado
     useEffect(() => {
-        socket.emit('camaleao_load_state');
+        if (phase) socket.emit('camaleao_load_state');
 
         const handleSecret = ({ question, isChameleon }) => {
             setSecretQuestion(question);
@@ -20,9 +21,9 @@ export default function GameCamaleao({ players, isHost, roomId, gameData, phase 
 
         socket.on('camaleao_secret', handleSecret);
         return () => socket.off('camaleao_secret', handleSecret);
-    }, [phase]); // Re-sincroniza a cada mudança de fase
+    }, [phase, socket]);
 
-    // Acões
+    // Ações
     const sendAnswer = (e) => {
         e.preventDefault();
         if (myAnswer.trim()) {
@@ -37,7 +38,6 @@ export default function GameCamaleao({ players, isHost, roomId, gameData, phase 
     if (!gameData || !gameData.round) {
         return (
             <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white relative">
-                {/* BOTÕES DE EMERGÊNCIA */}
                 <div className="fixed top-4 right-4 z-50 flex gap-2">
                     {isHost && (
                         <button 
@@ -61,13 +61,14 @@ export default function GameCamaleao({ players, isHost, roomId, gameData, phase 
         );
     }
 
-    const hasAnswered = !!gameData.answers?.[socket.id];
-    const hasVoted = !!gameData.votes?.[socket.id];
+    // CORREÇÃO 2: Usar user.id em vez de socket.id (porque o socket.id muda se a pessoa der F5)
+    const hasAnswered = !!gameData.answers?.[user?.id];
+    const hasVoted = !!gameData.votes?.[user?.id];
 
     return (
         <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center p-4 relative">
             
-            {/* BARRA DE NAVEGAÇÃO FIXA (Requisito 1) */}
+            {/* BARRA DE NAVEGAÇÃO FIXA */}
             <div className="fixed top-4 right-4 z-50 flex gap-2">
                 {isHost && (
                     <button 
@@ -146,10 +147,11 @@ export default function GameCamaleao({ players, isHost, roomId, gameData, phase 
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+                            {/* CORREÇÃO 3: Usar p.userId em vez de p.id para buscar as respostas */}
                             {players.map(p => (
-                                <div key={p.id} className="bg-slate-800/80 p-4 rounded-xl border border-slate-700 flex flex-col">
+                                <div key={p.userId} className="bg-slate-800/80 p-4 rounded-xl border border-slate-700 flex flex-col">
                                     <span className="text-xs font-bold text-emerald-500 mb-1">{p.nickname}</span>
-                                    <span className="text-lg font-bold text-white">"{gameData.answers[p.id]}"</span>
+                                    <span className="text-lg font-bold text-white">"{gameData.answers[p.userId]}"</span>
                                 </div>
                             ))}
                         </div>
@@ -176,15 +178,16 @@ export default function GameCamaleao({ players, isHost, roomId, gameData, phase 
 
                         {!hasVoted ? (
                             <div className="grid grid-cols-2 gap-4">
+                                {/* CORREÇÃO 4: Usar userId para o alvo e para bloquear o voto em si mesmo */}
                                 {players.map(p => (
                                     <button 
-                                        key={p.id} 
-                                        disabled={p.id === socket.id} // Não pode votar em si mesmo
-                                        onClick={() => castVote(p.id)}
+                                        key={p.userId} 
+                                        disabled={p.userId === user?.id} 
+                                        onClick={() => castVote(p.userId)}
                                         className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed p-4 rounded-2xl border-2 border-slate-700 hover:border-yellow-500 transition font-bold text-lg flex flex-col items-center gap-2"
                                     >
                                         <span>{p.nickname}</span>
-                                        <span className="text-xs font-normal text-slate-400">"{gameData.answers[p.id]}"</span>
+                                        <span className="text-xs font-normal text-slate-400">"{gameData.answers[p.userId]}"</span>
                                     </button>
                                 ))}
                             </div>
@@ -210,7 +213,7 @@ export default function GameCamaleao({ players, isHost, roomId, gameData, phase 
                             <div className="absolute top-0 left-0 w-full h-2 bg-emerald-500"></div>
                             <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">O Camaleão era...</p>
                             <h2 className="text-4xl font-black text-white mb-6">
-                                {players.find(p => p.id === gameData.chameleonId)?.nickname}
+                                {players.find(p => p.userId === gameData.chameleonId)?.nickname}
                             </h2>
                             <p className="text-xs text-slate-500 uppercase font-bold mb-1">A pergunta dele era:</p>
                             <p className="text-lg font-medium text-emerald-300 italic">"{gameData.chameleonQuestion}"</p>
@@ -220,10 +223,10 @@ export default function GameCamaleao({ players, isHost, roomId, gameData, phase 
                         <div className="w-full max-w-md bg-slate-800/50 p-4 rounded-2xl border border-slate-700 mb-8">
                             <h3 className="font-bold text-sm text-slate-400 uppercase mb-3 flex items-center justify-center gap-2"><Trophy size={16}/> Pontuação</h3>
                             <div className="space-y-2">
-                                {players.sort((a,b) => gameData.scores[b.id] - gameData.scores[a.id]).map((p, idx) => (
-                                    <div key={p.id} className="flex justify-between bg-slate-900/50 p-2 rounded-lg">
+                                {players.sort((a,b) => (gameData.scores[b.userId] || 0) - (gameData.scores[a.userId] || 0)).map((p, idx) => (
+                                    <div key={p.userId} className="flex justify-between bg-slate-900/50 p-2 rounded-lg">
                                         <span className="font-bold text-slate-300">{idx + 1}. {p.nickname}</span>
-                                        <span className="font-mono text-yellow-400 font-bold">{gameData.scores[p.id]} pts</span>
+                                        <span className="font-mono text-yellow-400 font-bold">{gameData.scores[p.userId] || 0} pts</span>
                                     </div>
                                 ))}
                             </div>
